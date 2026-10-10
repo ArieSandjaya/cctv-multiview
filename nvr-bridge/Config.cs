@@ -38,6 +38,15 @@ namespace NvrBridge
         public int ClipRetentionMinutes = 60;
         public int MaxConcurrentDownloads = 2;
 
+        // PTZ kamera Dahua (opsional) dan penyimpanan peta
+        public string AllowOrigin = "";
+        public string PtzUser = "";
+        public string PtzPassword = "";
+        public int PtzChannel = 0;
+        public int PtzMaxMoveSeconds = 8;
+        public Dictionary<string, string> PtzCameras = new Dictionary<string, string>(StringComparer.Ordinal);
+        public string DataDir;
+
         public string ClipDir;
         public string WebDir;
         public bool Verbose;
@@ -114,6 +123,36 @@ namespace NvrBridge
             c.ClipRetentionMinutes = Int(kv, "ClipRetentionMinutes", c.ClipRetentionMinutes, 5, 1440);
             c.MaxConcurrentDownloads = Int(kv, "MaxConcurrentDownloads", c.MaxConcurrentDownloads, 1, 8);
 
+            // Halaman multiview (go2rtc, port lain) memanggil API ini lintas-origin: tulis asalnya di sini.
+            c.AllowOrigin = Get(kv, "AllowOrigin", "").TrimEnd('/');
+            if (c.AllowOrigin.Length > 0)
+            {
+                Uri ou;
+                if (!Uri.TryCreate(c.AllowOrigin, UriKind.Absolute, out ou) || (ou.Scheme != "http" && ou.Scheme != "https") || ou.AbsolutePath != "/")
+                    throw new ConfigException("AllowOrigin harus berupa alamat tanpa path, contoh: http://192.168.1.10:1984");
+                c.AllowOrigin = ou.GetLeftPart(UriPartial.Authority);
+            }
+            c.PtzUser = Get(kv, "PtzUser", "");
+            c.PtzPassword = Get(kv, "PtzPassword", "");
+            c.PtzChannel = Int(kv, "PtzChannel", c.PtzChannel, 0, 64);
+            c.PtzMaxMoveSeconds = Int(kv, "PtzMaxMoveSeconds", c.PtzMaxMoveSeconds, 1, 60);
+            foreach (var part in Get(kv, "PtzCameras", "").Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                int eq = part.IndexOf('=');
+                string id = eq > 0 ? part.Substring(0, eq).Trim() : "";
+                string host = eq > 0 ? part.Substring(eq + 1).Trim() : "";
+                if (!System.Text.RegularExpressions.Regex.IsMatch(id, @"^[A-Za-z0-9_-]{1,32}$"))
+                    throw new ConfigException("PtzCameras: nama stream tidak valid: '" + id + "' (huruf, angka, _ atau -).");
+                Uri hu;
+                if (host.Length == 0 || !Uri.TryCreate("http://" + host + "/", UriKind.Absolute, out hu) || hu.Host.Length == 0 ||
+                    hu.AbsolutePath != "/" || hu.UserInfo.Length > 0)
+                    throw new ConfigException("PtzCameras: alamat kamera tidak valid untuk '" + id + "': '" + host + "' (contoh: cam01=192.168.1.101).");
+                c.PtzCameras[id] = hu.Authority;
+            }
+            if (c.PtzCameras.Count > 0 && c.PtzUser.Length == 0)
+                throw new ConfigException("PtzCameras diisi tetapi PtzUser kosong.");
+
+            c.DataDir = Path.GetFullPath(Path.Combine(baseDir, Get(kv, "DataDir", "data")));
             c.ClipDir = Path.GetFullPath(Path.Combine(baseDir, Get(kv, "ClipDir", "clips")));
             c.WebDir = Path.GetFullPath(Path.Combine(baseDir, Get(kv, "WebDir", "web")));
             c.Verbose = Bool(kv, "Verbose", false);

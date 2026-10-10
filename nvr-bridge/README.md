@@ -71,6 +71,30 @@ nvrCam: { cam01: 1, cam02: 2 },   // nama stream go2rtc -> nomor kamera di NVR
 
 Tiap tile lalu punya tombol **Playback** yang membuka halaman ini dengan kamera yang sudah terpilih.
 
+## PTZ kamera Dahua dan peta denah (untuk halaman multiview)
+
+NvrBridge juga menjadi jembatan untuk dua fitur di halaman multiview. Browser tidak bisa memanggil kamera Dahua langsung karena butuh login Digest, jadi permintaan PTZ lewat NvrBridge.
+
+**Pengaturan di `nvrbridge.config`:**
+
+```
+AllowOrigin=http://IP-SERVER:1984
+PtzCameras=cam01=192.168.1.101;cam05=192.168.1.105
+PtzUser=ptz
+PtzPassword=...
+```
+
+- `AllowOrigin` adalah alamat halaman multiview (go2rtc). Tanpa ini browser memblokir panggilan dari port 1984 ke 8090.
+- `PtzCameras`: nama stream di go2rtc = alamat kamera. Hanya kamera yang dicantumkan yang punya panel PTZ dan hanya itu yang bisa dituju.
+- Di `www/config.js` halaman multiview, `nvrUrl` (atau `bridgeUrl`) harus berisi alamat NvrBridge, misalnya `http://IP-SERVER:8090/`.
+- **Penting:** jika `BridgeUser` diisi, browser tidak meminta login untuk panggilan lintas-origin ini, jadi PTZ dan peta tidak akan jalan dari halaman multiview. Pakai jaringan internal tepercaya, atau kosongkan `BridgeUser`. Panggilan yang mengubah sesuatu (PTZ, simpan peta) tetap butuh header `X-NvrBridge` dan hanya diterima dari `AllowOrigin`.
+
+**PTZ:** buka satu kamera (klik dua kali tile). Jika kamera itu ada di `PtzCameras`, panel PTZ muncul: 8 arah, zoom, fokus, kecepatan 1-8, dan preset 1-255. Gerakan berjalan selama tombol ditahan. Jika tombol stop tidak sampai (jaringan putus, tab ditutup), kamera berhenti sendiri setelah `PtzMaxMoveSeconds` (default 8 detik). Perintah yang dikirim adalah `/cgi-bin/ptz.cgi` milik Dahua (`action=start|stop`, kode `Up`, `LeftUp`, `ZoomTele`, `GotoPreset`, dan seterusnya).
+
+**Peta denah:** tombol **Peta** di header. Tekan **Ubah**, lalu **+ Peta baru** untuk mengunggah gambar denah (PNG/JPG, maks 5 MB). Pilih kamera dari daftar, klik di gambar untuk meletakkan ikonnya, seret untuk menggeser, lalu **Simpan**. Di mode lihat, klik ikon untuk membuka kamera itu. Data disimpan di folder `data\` (`maps.json` dan `maps\`). Menghapus peta tidak menghapus file gambarnya; hapus manual jika perlu.
+
+**Belum diuji di kamera asli.** Logika PTZ diuji terhadap kamera tiruan yang meniru login Digest dan `ptz.cgi`. Kode perintah dan argumen mengikuti pola Dahua yang umum, tetapi firmware OEM bisa berbeda. Uji dulu dengan satu kamera: arah gerak, zoom, dan preset. Jika kamera tidak bergerak, jalankan dengan `Verbose=true` dan kirim log konsolnya. Jika arah terbalik atau kamera menjawab HTTP 404/400, nomor `PtzChannel` (default 0) atau kode perintahnya yang perlu disesuaikan.
+
 ## Uji pertama (wajib)
 
 1. Jalankan `NvrBridge.exe --selftest`. Harus muncul "Login: OK".

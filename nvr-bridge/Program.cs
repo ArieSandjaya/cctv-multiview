@@ -44,8 +44,10 @@ namespace NvrBridge
             {
                 if (selfTest) return await SelfTestAsync(cfg, nvr).ConfigureAwait(false);
 
+                Directory.CreateDirectory(cfg.DataDir);
                 using (var jobs = new JobManager(cfg, nvr))
-                using (var server = new WebServer(cfg, nvr, jobs))
+                using (var ptz = new PtzClient(cfg))
+                using (var server = new WebServer(cfg, nvr, jobs, ptz))
                 {
                     try { server.Start(); }
                     catch (HttpListenerException e)
@@ -59,6 +61,9 @@ namespace NvrBridge
                     Log.Info("NvrBridge berjalan di " + cfg.ListenPrefix);
                     Log.Info("NVR: " + cfg.NvrBase + "  | kamera: " + cfg.Cameras.Count +
                              "  | zona waktu NVR: " + (cfg.NvrTimeUtc ? "UTC" : "lokal (" + TimeZoneInfo.Local.DisplayName + ")"));
+                    if (ptz.Enabled) Log.Info("PTZ aktif untuk: " + string.Join(", ", ptz.CameraIds));
+                    if (cfg.AllowOrigin.Length > 0 && cfg.BridgeUser.Length > 0)
+                        Log.Warn("AllowOrigin diisi bersama BridgeUser: browser tidak akan meminta login lintas-origin, jadi halaman multiview tidak bisa memakai API ini. Kosongkan BridgeUser atau akses lewat jaringan tepercaya saja.");
                     if (cfg.BridgeUser.Length == 0 && !cfg.ListenPrefix.Contains("localhost") && !cfg.ListenPrefix.Contains("127.0.0.1"))
                         Log.Warn("Halaman dapat dibuka tanpa login. Isi BridgeUser/BridgePassword di nvrbridge.config.");
                     Console.WriteLine("Tekan Ctrl+C untuk berhenti.");

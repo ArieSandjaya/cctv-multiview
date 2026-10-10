@@ -10,6 +10,9 @@ window.MULTIVIEW_CONFIG = {
   // Contoh: "http://192.168.1.50". Kosongkan "" untuk menyembunyikan tombol.
   nvrUrl: "",
 
+  // Alamat NvrBridge untuk PTZ dan peta denah. Kosong = memakai nvrUrl. Contoh: "http://IP-SERVER:8090/"
+  bridgeUrl: "",
+
   // Menyambungkan tile ke nomor kamera di NVR, agar tombol "Playback" membuka rekaman kamera itu.
   // Kunci = nama stream di go2rtc.yaml, nilai = nomor kamera yang terdaftar di NVR.
   // Dipakai bersama nvr-bridge (isi nvrUrl dengan alamat bridge, mis. "http://IP-SERVER:8090/").

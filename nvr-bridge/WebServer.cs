@@ -16,10 +16,14 @@ namespace NvrBridge
         static readonly CultureInfo CI = CultureInfo.InvariantCulture;
         static readonly Regex ClipNameRx = new Regex(@"^[0-9a-f]{32}_\d{1,3}\.mp4$", RegexOptions.Compiled);
         static readonly Regex JobIdRx = new Regex(@"^[0-9a-f]{32}$", RegexOptions.Compiled);
+        static readonly Regex MapIdRx = new Regex(@"^[a-z0-9]{1,16}$", RegexOptions.Compiled);
+        const int MaxMapsJson = 256 * 1024, MaxMapImage = 5 * 1024 * 1024;
 
         readonly AppConfig cfg;
         readonly NvrClient nvr;
         readonly JobManager jobs;
+        readonly PtzClient ptz;
+        readonly object mapsLock = new object();
         readonly HttpListener listener = new HttpListener();
         readonly CancellationTokenSource stop = new CancellationTokenSource();
         readonly byte[] authExpected;
@@ -28,11 +32,12 @@ namespace NvrBridge
         string rangeJson;
         readonly object rangeLock = new object();
 
-        public WebServer(AppConfig cfg, NvrClient nvr, JobManager jobs)
+        public WebServer(AppConfig cfg, NvrClient nvr, JobManager jobs, PtzClient ptz)
         {
             this.cfg = cfg;
             this.nvr = nvr;
             this.jobs = jobs;
+            this.ptz = ptz;
             if (cfg.BridgeUser.Length > 0)
                 authExpected = Encoding.UTF8.GetBytes(cfg.BridgeUser + ":" + cfg.BridgePassword);
             listener.Prefixes.Add(cfg.ListenPrefix);
@@ -72,6 +77,26 @@ namespace NvrBridge
                 res.Headers["X-Content-Type-Options"] = "nosniff";
                 res.Headers["Cache-Control"] = "no-store";
                 res.Headers["Referrer-Policy"] = "no-referrer";
+
+                string origin = req.Headers["Origin"];
+                bool corsOk = cfg.AllowOrigin.Length > 0 && origin == cfg.AllowOrigin;
+                if (corsOk)
+                {
+                    res.Headers["Access-Control-Allow-Origin"] = origin;
+                    res.Headers["Vary"] = "Origin";
+                    res.Headers["Cross-Origin-Resource-Policy"] = "cross-origin";
+                }
+                if (req.HttpMethod == "OPTIONS")
+                {
+                    if (corsOk)
+                    {
+                        res.Headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, OPTIONS";
+                        res.Headers["Access-Control-Allow-Headers"] = "X-NvrBridge, Content-Type";
+                        res.Headers["Access-Control-Max-Age"] = "600";
+                    }
+                    res.StatusCode = 204;
+                    return;
+                }
 
                 if (!Authorized(req))
                 {
@@ -116,6 +141,36 @@ namespace NvrBridge
                     var files = string.Join(",", job.Files.Select(f => Json.Q("/clips/" + f)));
                     await SendJsonAsync(res, 200, "{\"id\":" + Json.Q(job.Id) + ",\"state\":" + Json.Q(job.State) + ",\"message\":" + Json.Q(job.Message) +
                         ",\"bytes\":" + Interlocked.Read(ref job.Bytes).ToString(CI) + ",\"files\":[" + files + "]}").ConfigureAwait(false);
+                }
+                else if (path == "/api/ptz/cams" && method == "GET")
+                {
+                    await SendJsonAsync(res, 200, "{\"cams\":[" + string.Join(",", ptz.CameraIds.Select(Json.Q)) + "]}").ConfigureAwait(false);
+                }
+                else if (path == "/api/ptz")
+                {
+                    if (method != "POST") { await SendJsonAsync(res, 405, Err("Gunakan POST.")).ConfigureAwait(false); return; }
+                    if (req.Headers["X-NvrBridge"] != "1") { await SendJsonAsync(res, 403, Err("Header X-NvrBridge: 1 diperlukan.")).ConfigureAwait(false); return; }
+                    await HandlePtzAsync(req, res).ConfigureAwait(false);
+                }
+                else if (path == "/api/maps")
+                {
+                    if (method == "GET") await HandleMapsGetAsync(res).ConfigureAwait(false);
+                    else if (method == "PUT")
+                    {
+                        if (req.Headers["X-NvrBridge"] != "1") { await SendJsonAsync(res, 403, Err("Header X-NvrBridge: 1 diperlukan.")).ConfigureAwait(false); return; }
+                        await HandleMapsPutAsync(req, res).ConfigureAwait(false);
+                    }
+                    else await SendJsonAsync(res, 405, Err("Gunakan GET atau PUT.")).ConfigureAwait(false);
+                }
+                else if (path == "/api/mapimage")
+                {
+                    if (method != "POST") { await SendJsonAsync(res, 405, Err("Gunakan POST.")).ConfigureAwait(false); return; }
+                    if (req.Headers["X-NvrBridge"] != "1") { await SendJsonAsync(res, 403, Err("Header X-NvrBridge: 1 diperlukan.")).ConfigureAwait(false); return; }
+                    await HandleMapImagePostAsync(req, res).ConfigureAwait(false);
+                }
+                else if (path.StartsWith("/maps/") && method == "GET")
+                {
+                    await ServeMapImageAsync(res, path.Substring("/maps/".Length)).ConfigureAwait(false);
                 }
                 else if (path.StartsWith("/clips/") && method == "GET")
                 {
@@ -196,6 +251,129 @@ namespace NvrBridge
             }
             catch (ArgumentException e) { await SendJsonAsync(res, 400, Err(e.Message)).ConfigureAwait(false); }
             catch (InvalidOperationException e) { await SendJsonAsync(res, 429, Err(e.Message)).ConfigureAwait(false); }
+        }
+
+        // ---------- PTZ ----------
+
+        async Task HandlePtzAsync(HttpListenerRequest req, HttpListenerResponse res)
+        {
+            string cam = req.QueryString["cam"] ?? "";
+            string cmd = req.QueryString["cmd"] ?? "";
+            int speed = 4, n = 0;
+            string sp = req.QueryString["speed"];
+            if (sp != null && !int.TryParse(sp, NumberStyles.None, CI, out speed)) { await SendJsonAsync(res, 400, Err("speed tidak valid.")).ConfigureAwait(false); return; }
+            string ns = req.QueryString["n"];
+            if (ns != null && !int.TryParse(ns, NumberStyles.None, CI, out n)) { await SendJsonAsync(res, 400, Err("n tidak valid.")).ConfigureAwait(false); return; }
+            try
+            {
+                if (cmd == "start") await ptz.StartAsync(cam, req.QueryString["dir"], speed).ConfigureAwait(false);
+                else if (cmd == "stop") await ptz.StopAsync(cam, req.QueryString["dir"]).ConfigureAwait(false);
+                else if (cmd == "preset") await ptz.PresetAsync(cam, n).ConfigureAwait(false);
+                else { await SendJsonAsync(res, 400, Err("cmd harus start, stop, atau preset.")).ConfigureAwait(false); return; }
+                await SendJsonAsync(res, 200, "{\"ok\":true}").ConfigureAwait(false);
+            }
+            catch (ArgumentException e) { await SendJsonAsync(res, 400, Err(e.Message)).ConfigureAwait(false); }
+            catch (PtzException e) { await SendJsonAsync(res, 502, Err(e.Message)).ConfigureAwait(false); }
+        }
+
+        // ---------- peta denah ----------
+
+        string MapsJsonPath { get { return Path.Combine(cfg.DataDir, "maps.json"); } }
+        string MapsDir { get { return Path.Combine(cfg.DataDir, "maps"); } }
+
+        async Task HandleMapsGetAsync(HttpListenerResponse res)
+        {
+            string json = "{\"maps\":[]}";
+            lock (mapsLock)
+            {
+                if (File.Exists(MapsJsonPath)) json = File.ReadAllText(MapsJsonPath, Encoding.UTF8);
+            }
+            await SendJsonAsync(res, 200, json).ConfigureAwait(false);
+        }
+
+        async Task HandleMapsPutAsync(HttpListenerRequest req, HttpListenerResponse res)
+        {
+            byte[] body = await ReadBodyAsync(req, MaxMapsJson).ConfigureAwait(false);
+            if (body == null) { await SendJsonAsync(res, 413, Err("Data peta terlalu besar (maks 256 KB).")).ConfigureAwait(false); return; }
+            string text;
+            try { text = new UTF8Encoding(false, true).GetString(body); }
+            catch (ArgumentException) { await SendJsonAsync(res, 400, Err("Data peta bukan UTF-8.")).ConfigureAwait(false); return; }
+            string t = text.Trim();
+            if (t.Length < 2 || t[0] != '{' || t[t.Length - 1] != '}' || t.IndexOf("\"maps\"", StringComparison.Ordinal) < 0)
+            { await SendJsonAsync(res, 400, Err("Format data peta tidak valid.")).ConfigureAwait(false); return; }
+            lock (mapsLock)
+            {
+                Directory.CreateDirectory(cfg.DataDir);
+                string tmp = MapsJsonPath + ".tmp";
+                File.WriteAllText(tmp, t, new UTF8Encoding(false));
+                if (File.Exists(MapsJsonPath)) File.Delete(MapsJsonPath);
+                File.Move(tmp, MapsJsonPath);
+            }
+            await SendJsonAsync(res, 200, "{\"ok\":true}").ConfigureAwait(false);
+        }
+
+        async Task HandleMapImagePostAsync(HttpListenerRequest req, HttpListenerResponse res)
+        {
+            string id = req.QueryString["id"] ?? "";
+            if (!MapIdRx.IsMatch(id)) { await SendJsonAsync(res, 400, Err("id peta tidak valid (a-z, 0-9, maks 16).")).ConfigureAwait(false); return; }
+            byte[] body = await ReadBodyAsync(req, MaxMapImage).ConfigureAwait(false);
+            if (body == null) { await SendJsonAsync(res, 413, Err("Gambar terlalu besar (maks 5 MB).")).ConfigureAwait(false); return; }
+            string ext = null;
+            if (body.Length > 8 && body[0] == 0x89 && body[1] == 0x50 && body[2] == 0x4E && body[3] == 0x47) ext = "png";
+            else if (body.Length > 4 && body[0] == 0xFF && body[1] == 0xD8 && body[2] == 0xFF) ext = "jpg";
+            if (ext == null) { await SendJsonAsync(res, 400, Err("Gambar harus PNG atau JPEG.")).ConfigureAwait(false); return; }
+            lock (mapsLock)
+            {
+                Directory.CreateDirectory(MapsDir);
+                foreach (var old in new[] { "png", "jpg" })
+                {
+                    string op = Path.Combine(MapsDir, id + "." + old);
+                    if (File.Exists(op)) File.Delete(op);
+                }
+                File.WriteAllBytes(Path.Combine(MapsDir, id + "." + ext), body);
+            }
+            await SendJsonAsync(res, 200, "{\"ok\":true}").ConfigureAwait(false);
+        }
+
+        async Task ServeMapImageAsync(HttpListenerResponse res, string id)
+        {
+            byte[] data = null;
+            string type = null;
+            if (MapIdRx.IsMatch(id))
+            {
+                lock (mapsLock)
+                {
+                    string p = Path.Combine(MapsDir, id + ".png");
+                    if (File.Exists(p)) { data = File.ReadAllBytes(p); type = "image/png"; }
+                    else
+                    {
+                        p = Path.Combine(MapsDir, id + ".jpg");
+                        if (File.Exists(p)) { data = File.ReadAllBytes(p); type = "image/jpeg"; }
+                    }
+                }
+            }
+            if (data == null) { await SendTextAsync(res, 404, "text/plain", "Peta tidak ditemukan.").ConfigureAwait(false); return; }
+            res.StatusCode = 200;
+            res.ContentType = type;
+            res.ContentLength64 = data.Length;
+            await res.OutputStream.WriteAsync(data, 0, data.Length).ConfigureAwait(false);
+        }
+
+        /// <summary>Baca isi permintaan dengan batas ukuran; null jika melebihi batas.</summary>
+        static async Task<byte[]> ReadBodyAsync(HttpListenerRequest req, int max)
+        {
+            if (req.ContentLength64 > max) return null;
+            using (var ms = new MemoryStream())
+            {
+                var buf = new byte[16384];
+                int n;
+                while ((n = await req.InputStream.ReadAsync(buf, 0, buf.Length).ConfigureAwait(false)) > 0)
+                {
+                    ms.Write(buf, 0, n);
+                    if (ms.Length > max) return null;
+                }
+                return ms.ToArray();
+            }
         }
 
         // ---------- klip MP4 dengan dukungan Range ----------

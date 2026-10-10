@@ -151,6 +151,52 @@
   #viewer .vbody cam-player { position: absolute; inset: 0; }
   .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
 
+
+  /* ---------- PTZ ---------- */
+  .ptz {
+    position: absolute; right: 16px; bottom: 16px; z-index: 2;
+    background: #12161cd9; border: 1px solid var(--line); border-radius: 10px;
+    padding: 10px; display: grid; gap: 8px; width: 200px; backdrop-filter: blur(4px);
+  }
+  .ptz[hidden] { display: none; }
+  .ptz .pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+  .ptz .pad button { justify-content: center; padding: 0; min-height: 40px; font-size: 16px; touch-action: none; user-select: none; }
+  .ptz .pad button:active, .ptz .row button:active { background: #243040; border-color: var(--accent); }
+  .ptz .row { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+  .ptz .row button { justify-content: center; touch-action: none; user-select: none; }
+  .ptz label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+  .ptz input, .ptz select, #mapview input, #mapview select {
+    font: inherit; color: var(--text); background: #181e26; border: 1px solid var(--line);
+    border-radius: 6px; padding: 4px 6px; min-height: 28px; min-width: 0;
+  }
+  .ptz input[type=number] { width: 64px; }
+  .ptz .pst { display: flex; gap: 4px; align-items: center; }
+  .ptz .err { color: var(--bad); font-size: 12px; min-height: 16px; }
+
+  /* ---------- Peta denah ---------- */
+  #mapview { position: fixed; inset: 0; z-index: 11; display: none; flex-direction: column; background: #000f; }
+  #mapview.show { display: flex; }
+  #mapview .vbar { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 8px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  #mapview .vbar[hidden], #mapview [hidden] { display: none !important; }
+  #mapstage { flex: 1 1 auto; min-height: 0; overflow: auto; display: grid; place-items: center; padding: 12px; }
+  #mapwrap { position: relative; display: inline-block; line-height: 0; }
+  #mapimg { max-width: 100%; max-height: calc(100vh - 130px); display: block; user-select: none; -webkit-user-drag: none; }
+  #mapwrap.edit { cursor: crosshair; }
+  .mk {
+    position: absolute; transform: translate(-50%, -50%);
+    display: inline-flex; align-items: center; gap: 5px; line-height: 1.2;
+    background: #12161cf0; border: 1px solid var(--accent); color: var(--text);
+    border-radius: 999px; padding: 3px 9px 3px 7px; font-size: 12px; white-space: nowrap;
+    cursor: pointer; touch-action: none;
+  }
+  .mk i { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); display: block; }
+  .mk:hover { background: #1d2733; }
+  .mk.sel { border-color: var(--warn); }
+  .mk.sel i { background: var(--warn); }
+  #mapmsg { color: var(--muted); font-size: 12px; }
+  #mapmsg.err { color: var(--bad); }
+  #mapempty { color: var(--muted); padding: 24px; text-align: center; }
+
   @media (max-width: 640px) {
     header { padding: 8px 10px; gap: 8px 10px; }
     .hide-sm { display: none; }
@@ -181,6 +227,7 @@
 
   <div class="group">
     <a id="nvr" class="btn" target="_blank" rel="noopener" hidden title="Buka web NX510 untuk playback rekaman">Playback NVR</a>
+    <button id="mapbtn" hidden title="Peta denah">Peta</button>
     <button id="fs" title="Layar penuh (F)">Layar penuh</button>
   </div>
 
@@ -202,6 +249,51 @@
     <button id="vclose" title="Tutup (Esc)">Tutup</button>
   </div>
   <div class="vbody" id="vbody"></div>
+  <div class="ptz" id="ptz" hidden aria-label="Kontrol PTZ">
+    <div class="pad" id="ptzpad">
+      <button data-dir="upleft" aria-label="Kiri atas">↖</button>
+      <button data-dir="up" aria-label="Atas">▲</button>
+      <button data-dir="upright" aria-label="Kanan atas">↗</button>
+      <button data-dir="left" aria-label="Kiri">◀</button>
+      <span></span>
+      <button data-dir="right" aria-label="Kanan">▶</button>
+      <button data-dir="downleft" aria-label="Kiri bawah">↙</button>
+      <button data-dir="down" aria-label="Bawah">▼</button>
+      <button data-dir="downright" aria-label="Kanan bawah">↘</button>
+    </div>
+    <div class="row" id="ptzzf">
+      <button data-dir="zoomout" aria-label="Zoom keluar">Zoom −</button>
+      <button data-dir="zoomin" aria-label="Zoom masuk">Zoom +</button>
+      <button data-dir="focusnear" aria-label="Fokus dekat">Fokus −</button>
+      <button data-dir="focusfar" aria-label="Fokus jauh">Fokus +</button>
+    </div>
+    <label>Kecepatan <select id="ptzspeed"><option>1</option><option>2</option><option>3</option><option selected>4</option><option>5</option><option>6</option><option>7</option><option>8</option></select></label>
+    <div class="pst"><label>Preset <input type="number" id="ptzpreset" min="1" max="255" value="1"></label><button id="ptzgo">Pergi</button></div>
+    <div class="err" id="ptzerr" role="status"></div>
+  </div>
+</div>
+
+<div id="mapview" role="dialog" aria-modal="true" aria-label="Peta denah">
+  <div class="vbar">
+    <select id="mapsel" aria-label="Pilih peta"></select>
+    <button id="mapedit" aria-pressed="false">Ubah</button>
+    <span id="mapedittools" hidden style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <input id="mapname" placeholder="Nama peta baru" maxlength="40" aria-label="Nama peta baru">
+      <button id="mapnew">+ Peta baru (PNG/JPG)</button>
+      <input type="file" id="mapfile" accept="image/png,image/jpeg" hidden>
+      <select id="mapcam" aria-label="Kamera yang diletakkan"></select>
+      <button id="mapunplace">Lepas dari peta</button>
+      <button id="mapsave">Simpan</button>
+      <button id="mapdel">Hapus peta</button>
+    </span>
+    <span id="mapmsg" role="status"></span>
+    <span class="spacer"></span>
+    <button id="mapclose" title="Tutup (Esc)">Tutup</button>
+  </div>
+  <div id="mapstage">
+    <div id="mapempty" hidden>Belum ada peta. Tekan <b>Ubah</b>, lalu <b>+ Peta baru</b> untuk mengunggah denah.</div>
+    <div id="mapwrap" hidden><img id="mapimg" alt="Denah"></div>
+  </div>
 </div>
 
 <script src="./config.js"></script>
@@ -219,7 +311,7 @@ class CamPlayer extends VideoRTC {
 customElements.define('cam-player', CamPlayer);
 
 const cfg = Object.assign({
-  title: 'CCTV Multiview', nvrUrl: '', nvrCam: {}, names: {}, order: [], hide: [],
+  title: 'CCTV Multiview', nvrUrl: '', bridgeUrl: '', nvrCam: {}, names: {}, order: [], hide: [],
   hdSuffix: '_hd', mode: 'mse,webrtc', layout: 'auto', rotateSeconds: 15,
 }, window.MULTIVIEW_CONFIG || {});
 
@@ -407,8 +499,11 @@ document.addEventListener('visibilitychange', () => {
 
 // ---------- viewer ----------
 let viewerT = null;
+let viewerCam = null;
 function openViewer(cam) {
   state.viewerOpen = true;
+  viewerCam = cam;
+  ptzShow(cam);
   clearGrid();                                 // hemat bandwidth dan decoder saat satu kamera dibuka
   const stream = cam.hd || cam.id;
   $('vname').textContent = cam.name;
@@ -425,6 +520,9 @@ function openViewer(cam) {
 function closeViewer() {
   if (!state.viewerOpen) return;
   state.viewerOpen = false;
+  ptzStop();
+  viewerCam = null;
+  $('ptz').hidden = true;
   viewer.classList.remove('show');
   if (viewerT) viewerT.player.remove();
   viewerT = null;
@@ -474,7 +572,9 @@ function toggleFs() {
 
 document.addEventListener('keydown', (e) => {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
-  if (e.key === 'Escape') return closeViewer();
+  if (e.target.matches('input, select, textarea')) { if (e.key === 'Escape') e.target.blur(); return; }
+  if (e.key === 'Escape') return mapOpen ? closeMap() : closeViewer();
+  if (mapOpen) return;
   switch (e.key) {
     case 'ArrowLeft': go(-1); break;
     case 'ArrowRight': go(1); break;
@@ -510,6 +610,236 @@ const fmt = new Intl.DateTimeFormat('id-ID', {dateStyle: 'medium', timeStyle: 'm
 const tick = () => { $('clock').textContent = fmt.format(new Date()); };
 tick(); setInterval(tick, 1000);
 
+
+// ---------- jembatan ke NvrBridge (PTZ dan peta) ----------
+const bridgeBase = (cfg.bridgeUrl || cfg.nvrUrl || '').replace(/[?#].*$/, '');
+const bridge = bridgeBase ? bridgeBase.replace(/\/?$/, '/') : '';
+async function bapi(path, opts = {}) {
+  const method = opts.method || 'GET';
+  const o = {method, cache: 'no-store'};
+  if (method !== 'GET') o.headers = Object.assign({'X-NvrBridge': '1'}, opts.headers || {});
+  if (opts.body !== undefined) o.body = opts.body;
+  const r = await fetch(bridge + path, o);
+  const j = await r.json().catch(() => null);
+  if (!r.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
+  return j;
+}
+const ptzCams = new Set();
+
+// ---------- PTZ ----------
+let ptzCur = null, ptzQueue = Promise.resolve();
+function ptzErr(msg) { $('ptzerr').textContent = msg || ''; }
+function ptzCall(qs) {
+  // Perintah dikirim berurutan agar "stop" tidak mendahului "start"
+  ptzQueue = ptzQueue.then(() => bapi('api/ptz?' + qs, {method: 'POST'})).then(() => ptzErr(''), (e) => ptzErr(e.message));
+}
+function ptzShow(cam) {
+  ptzErr('');
+  $('ptz').hidden = !(bridge && ptzCams.has(cam.id));
+}
+function ptzStart(dir) {
+  if (!viewerCam) return;
+  ptzStop();
+  ptzCur = {cam: viewerCam.id, dir};
+  ptzCall('cmd=start&cam=' + encodeURIComponent(ptzCur.cam) + '&dir=' + dir + '&speed=' + encodeURIComponent($('ptzspeed').value));
+}
+function ptzStop() {
+  if (!ptzCur) return;
+  const c = ptzCur; ptzCur = null;
+  ptzCall('cmd=stop&cam=' + encodeURIComponent(c.cam) + '&dir=' + c.dir);
+}
+for (const box of [$('ptzpad'), $('ptzzf')]) {
+  box.addEventListener('pointerdown', (e) => {
+    const b = e.target.closest('button[data-dir]');
+    if (!b) return;
+    e.preventDefault();
+    try { b.setPointerCapture(e.pointerId); } catch {}
+    ptzStart(b.dataset.dir);
+  });
+  for (const ev of ['pointerup', 'pointercancel', 'lostpointercapture']) box.addEventListener(ev, ptzStop);
+}
+addEventListener('blur', ptzStop);
+$('ptzgo').addEventListener('click', () => {
+  if (!viewerCam) return;
+  const n = parseInt($('ptzpreset').value, 10);
+  if (!(n >= 1 && n <= 255)) return ptzErr('Nomor preset 1-255.');
+  ptzCall('cmd=preset&cam=' + encodeURIComponent(viewerCam.id) + '&n=' + n);
+});
+async function loadPtz() {
+  if (!bridge) return;
+  try { for (const id of (await bapi('api/ptz/cams')).cams || []) ptzCams.add(id); } catch {}
+}
+
+// ---------- peta denah ----------
+let mapOpen = false, mapEdit = false, mapData = {maps: []}, mapCur = null, mapDirty = false;
+const mapMsg = (t, bad) => { $('mapmsg').textContent = t || ''; $('mapmsg').className = bad ? 'err' : ''; };
+const clamp01 = (v) => Math.min(1, Math.max(0, +v || 0));
+const newMapId = () => { const a = new Uint8Array(8); crypto.getRandomValues(a); return Array.from(a, (x) => (x % 36).toString(36)).join(''); };
+
+function sanitizeMaps(j) {
+  const out = [];
+  for (const m of (j && Array.isArray(j.maps)) ? j.maps : []) {
+    if (!m || !/^[a-z0-9]{1,16}$/.test(m.id || '')) continue;
+    out.push({
+      id: m.id, v: +m.v || 0,
+      name: String(m.name || m.id).slice(0, 40),
+      cams: (Array.isArray(m.cams) ? m.cams : []).filter(c => c && typeof c.id === 'string')
+        .map(c => ({id: c.id, x: clamp01(c.x), y: clamp01(c.y)})),
+    });
+  }
+  return {maps: out};
+}
+async function loadMaps() {
+  mapData = sanitizeMaps(await bapi('api/maps'));
+  mapDirty = false;
+}
+function camName(id) { const c = state.cams.find(x => x.id === id); return c ? c.name : id; }
+
+function renderMapSelect() {
+  const sel = $('mapsel');
+  sel.replaceChildren(...mapData.maps.map(m => { const o = document.createElement('option'); o.value = m.id; o.textContent = m.name; return o; }));
+  if (!mapData.maps.some(m => m.id === mapCur)) mapCur = mapData.maps.length ? mapData.maps[0].id : null;
+  if (mapCur) sel.value = mapCur;
+  sel.hidden = !mapData.maps.length;
+  const cs = $('mapcam');
+  const prev = cs.value;
+  cs.replaceChildren(...state.cams.map(c => { const o = document.createElement('option'); o.value = c.id; o.textContent = c.name; return o; }));
+  if (prev && state.cams.some(c => c.id === prev)) cs.value = prev;
+}
+function curMap() { return mapData.maps.find(m => m.id === mapCur) || null; }
+
+function renderMap() {
+  renderMapSelect();
+  const m = curMap();
+  $('mapempty').hidden = !!m;
+  $('mapwrap').hidden = !m;
+  $('mapwrap').classList.toggle('edit', mapEdit);
+  $('mapedittools').hidden = !mapEdit;
+  $('mapedit').setAttribute('aria-pressed', String(mapEdit));
+  $('mapdel').hidden = !m; $('mapunplace').hidden = !m; $('mapcam').hidden = !m;
+  for (const mk of document.querySelectorAll('#mapwrap .mk')) mk.remove();
+  if (!m) return;
+  const img = $('mapimg');
+  const src = bridge + 'maps/' + m.id + (m.v ? '?v=' + m.v : '');
+  if (img.getAttribute('data-src') !== src) { img.setAttribute('data-src', src); img.src = src; }
+  for (const c of m.cams) {
+    const mk = document.createElement('div');
+    mk.className = 'mk' + (mapEdit && c.id === $('mapcam').value ? ' sel' : '');
+    mk.dataset.id = c.id;
+    mk.style.left = (c.x * 100) + '%'; mk.style.top = (c.y * 100) + '%';
+    mk.tabIndex = 0; mk.setAttribute('role', 'button');
+    const dot = document.createElement('i');
+    const label = document.createElement('span'); label.textContent = camName(c.id);
+    mk.append(dot, label);
+    $('mapwrap').appendChild(mk);
+  }
+}
+
+function placeFromEvent(e, id) {
+  const r = $('mapimg').getBoundingClientRect();
+  const m = curMap(); if (!m || !r.width) return;
+  const x = clamp01((e.clientX - r.left) / r.width), y = clamp01((e.clientY - r.top) / r.height);
+  const c = m.cams.find(k => k.id === id);
+  if (c) { c.x = x; c.y = y; } else m.cams.push({id, x, y});
+  mapDirty = true;
+}
+
+let drag = null;
+$('mapwrap').addEventListener('pointerdown', (e) => {
+  if (!mapEdit) return;
+  const mk = e.target.closest('.mk');
+  if (mk) {
+    $('mapcam').value = mk.dataset.id;
+    drag = {id: mk.dataset.id, el: mk, moved: false};
+    try { mk.setPointerCapture(e.pointerId); } catch {}
+    for (const o of document.querySelectorAll('#mapwrap .mk')) o.classList.toggle('sel', o === mk);
+    e.preventDefault();
+  }
+});
+$('mapwrap').addEventListener('pointermove', (e) => {
+  if (!drag) return;
+  drag.moved = true;
+  placeFromEvent(e, drag.id);
+  const c = curMap().cams.find(k => k.id === drag.id);
+  drag.el.style.left = (c.x * 100) + '%'; drag.el.style.top = (c.y * 100) + '%';
+});
+$('mapwrap').addEventListener('pointerup', () => { drag = null; });
+$('mapwrap').addEventListener('click', (e) => {
+  const mk = e.target.closest('.mk');
+  if (mapEdit) {
+    if (mk) return;                                   // pilih/geser ikon sudah ditangani pointerdown
+    if (e.target === $('mapimg')) { placeFromEvent(e, $('mapcam').value); renderMap(); mapMsg('Belum disimpan.'); }
+  } else if (mk) {
+    const cam = state.cams.find(c => c.id === mk.dataset.id);
+    if (cam) { closeMap(); openViewer(cam); }
+  }
+});
+$('mapwrap').addEventListener('keydown', (e) => {
+  const mk = e.target.closest('.mk');
+  if (mk && !mapEdit && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); mk.click(); }
+});
+$('mapcam').addEventListener('change', renderMap);
+$('mapsel').addEventListener('change', () => { mapCur = $('mapsel').value; renderMap(); });
+$('mapedit').addEventListener('click', () => { mapEdit = !mapEdit; mapMsg(''); renderMap(); });
+$('mapunplace').addEventListener('click', () => {
+  const m = curMap(); if (!m) return;
+  m.cams = m.cams.filter(c => c.id !== $('mapcam').value);
+  mapDirty = true; renderMap(); mapMsg('Belum disimpan.');
+});
+$('mapnew').addEventListener('click', () => $('mapfile').click());
+$('mapfile').addEventListener('change', async () => {
+  const f = $('mapfile').files[0]; $('mapfile').value = '';
+  if (!f) return;
+  if (!/^image\/(png|jpeg)$/.test(f.type)) return mapMsg('Gambar harus PNG atau JPG.', true);
+  if (f.size > 5 * 1024 * 1024) return mapMsg('Gambar maksimal 5 MB.', true);
+  const id = newMapId();
+  mapMsg('Mengunggah…');
+  try {
+    await bapi('api/mapimage?id=' + id, {method: 'POST', body: f, headers: {'Content-Type': f.type}});
+    const name = ($('mapname').value.trim() || f.name.replace(/\.[^.]+$/, '') || 'Peta').slice(0, 40);
+    mapData.maps.push({id, name, v: Date.now(), cams: []});
+    mapCur = id; $('mapname').value = '';
+    await saveMaps();
+  } catch (e) { mapMsg(e.message, true); }
+});
+async function saveMaps() {
+  mapMsg('Menyimpan…');
+  try {
+    await bapi('api/maps', {method: 'PUT', body: JSON.stringify(mapData), headers: {'Content-Type': 'application/json'}});
+    mapDirty = false; mapMsg('Tersimpan.'); renderMap();
+  } catch (e) { mapMsg(e.message, true); }
+}
+$('mapsave').addEventListener('click', saveMaps);
+$('mapdel').addEventListener('click', async () => {
+  const m = curMap(); if (!m || !confirm('Hapus peta "' + m.name + '"?')) return;
+  mapData.maps = mapData.maps.filter(x => x.id !== m.id);
+  mapCur = null;
+  await saveMaps();
+});
+
+async function openMap() {
+  if (mapOpen) return;
+  mapOpen = true; mapEdit = false;
+  $('mapview').classList.add('show');
+  mapMsg('Memuat…');
+  try { await loadMaps(); mapMsg(''); } catch (e) { mapData = {maps: []}; mapMsg('Tidak bisa memuat peta: ' + e.message, true); }
+  renderMap();
+  $('mapclose').focus();
+}
+function closeMap() {
+  if (!mapOpen) return;
+  if (mapDirty && !confirm('Ada perubahan peta yang belum disimpan. Tutup tanpa menyimpan?')) return;
+  mapOpen = false; mapEdit = false; mapDirty = false;
+  $('mapview').classList.remove('show');
+}
+$('mapbtn').addEventListener('click', openMap);
+$('mapclose').addEventListener('click', closeMap);
+async function initBridge() {
+  if (!bridge) return;
+  await loadPtz();
+  try { await bapi('api/maps'); $('mapbtn').hidden = false; } catch {}
+}
+
 // ---------- mulai ----------
 function showNotice(html) {
   notice.querySelector('.box').innerHTML = html;
@@ -534,6 +864,7 @@ async function start() {
   }
   renderPage();
   applyRotate();
+  initBridge();
 }
 start();
 </script>

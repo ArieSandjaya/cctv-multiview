@@ -4,3 +4,4 @@ clips/
 .vs/
 *.user
 go2rtc.exe
+data/

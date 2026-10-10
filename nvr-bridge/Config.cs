@@ -10,6 +10,12 @@ namespace NvrBridge
         public ConfigException(string m) : base(m) { }
     }
 
+    sealed class PtzTarget
+    {
+        public string Host;     // host[:port]
+        public string Type;     // "dahua", "ipro" (aw_ptz) atau "onvif"
+    }
+
     sealed class Camera
     {
         public int Id;
@@ -44,7 +50,7 @@ namespace NvrBridge
         public string PtzPassword = "";
         public int PtzChannel = 0;
         public int PtzMaxMoveSeconds = 8;
-        public Dictionary<string, string> PtzCameras = new Dictionary<string, string>(StringComparer.Ordinal);
+        public Dictionary<string, PtzTarget> PtzCameras = new Dictionary<string, PtzTarget>(StringComparer.Ordinal);
         public string DataDir;
 
         public string ClipDir;
@@ -141,13 +147,20 @@ namespace NvrBridge
                 int eq = part.IndexOf('=');
                 string id = eq > 0 ? part.Substring(0, eq).Trim() : "";
                 string host = eq > 0 ? part.Substring(eq + 1).Trim() : "";
+                string type = "dahua";           // tanpa awalan = Dahua; awalan "ipro:" atau "onvif:" memilih jenis lain
+                int colon = host.IndexOf(':');
+                if (colon > 0)
+                {
+                    string pre = host.Substring(0, colon).Trim().ToLowerInvariant();
+                    if (pre == "dahua" || pre == "ipro" || pre == "onvif") { type = pre; host = host.Substring(colon + 1).Trim(); }
+                }
                 if (!System.Text.RegularExpressions.Regex.IsMatch(id, @"^[A-Za-z0-9_-]{1,32}$"))
                     throw new ConfigException("PtzCameras: nama stream tidak valid: '" + id + "' (huruf, angka, _ atau -).");
                 Uri hu;
                 if (host.Length == 0 || !Uri.TryCreate("http://" + host + "/", UriKind.Absolute, out hu) || hu.Host.Length == 0 ||
                     hu.AbsolutePath != "/" || hu.UserInfo.Length > 0)
                     throw new ConfigException("PtzCameras: alamat kamera tidak valid untuk '" + id + "': '" + host + "' (contoh: cam01=192.168.1.101).");
-                c.PtzCameras[id] = hu.Authority;
+                c.PtzCameras[id] = new PtzTarget { Host = hu.Authority, Type = type };
             }
             if (c.PtzCameras.Count > 0 && c.PtzUser.Length == 0)
                 throw new ConfigException("PtzCameras diisi tetapi PtzUser kosong.");

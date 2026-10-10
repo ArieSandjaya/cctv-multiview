@@ -21,6 +21,17 @@ window.MULTIVIEW_CONFIG = {
     // cam02: 2,
   },
 
+  // Kamera fisheye yang mengirim gambar lingkaran mentah. Kunci = nama stream di go2rtc.yaml.
+  // Tidak perlu diisi untuk fisheye yang sudah di-dewarp oleh kameranya sendiri.
+  //   mount: "ceiling" (langit-langit atau meja) atau "wall" (dinding)
+  //   fov:   sudut pandang lensa dalam derajat (default 180)
+  //   tile:  tampilan di tile: "view" (default, dewarp) atau "raw" (lingkaran asli)
+  //   mode:  tampilan awal saat diperbesar: "view" (default), "pano" (panorama 360, langit-langit), atau "raw"
+  //   cx, cy, r: pusat dan jari-jari lingkaran (pecahan frame) jika lingkaran tidak di tengah; mirror: true jika terbalik kiri-kanan
+  fisheye: {
+    // cam08: {mount: "ceiling", fov: 180},
+  },
+
   // Nama tampilan per kamera. Kunci = nama stream di go2rtc.yaml.
   // Kamera yang tidak ditulis di sini memakai nama stream-nya.
   names: {

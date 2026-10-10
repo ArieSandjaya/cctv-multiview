@@ -31,12 +31,22 @@ streams:
   # Ganti USER, PASS, dan IP. Jika password mengandung karakter khusus
   # (@ : / # ?), tulis dalam bentuk URL-encoded, misalnya @ menjadi %40.
   #
-  # Pola URL RTSP kamera i-PRO/Panasonic yang umum (cek kembali di menu
-  # kamera atau dengan ONVIF Device Manager, karena bisa beda per model/firmware):
-  #   stream 1: rtsp://USER:PASS@IP:554/cam/realmonitor?channel=1&subtype=0
-  #   stream 2: rtsp://USER:PASS@IP:554/cam/realmonitor?channel=1&subtype=1
-  # Untuk kodek H.265 ganti "h264" menjadi "h265". Untuk multiview, stream 2
-  # sebaiknya H.264 agar semua browser bisa memutarnya.
+  # Pola URL RTSP per merek (pola umum; cek di menu kamera atau uji di VLC,
+  # karena bisa beda per model/firmware). Merek boleh dicampur dalam satu file.
+  #
+  #   Dahua (kamera seri E, OEM Dahua):
+  #     stream 1: rtsp://USER:PASS@IP:554/cam/realmonitor?channel=1&subtype=0
+  #     stream 2: rtsp://USER:PASS@IP:554/cam/realmonitor?channel=1&subtype=1
+  #
+  #   i-PRO / Panasonic:
+  #     stream 1: rtsp://USER:PASS@IP:554/MediaInput/h264/stream_1
+  #     stream 2: rtsp://USER:PASS@IP:554/MediaInput/h264/stream_2
+  #     (kamera i-PRO yang sudah terdaftar di NX510 dengan protokol i-PRO juga bisa
+  #      ditarik langsung dari kamera; NX510 hanya dipakai untuk playback)
+  #
+  # Kamera fisheye: tulis URL-nya seperti kamera lain. Jika kamera mengirim gambar
+  # lingkaran mentah, daftarkan juga di "fisheye" pada www/config.js agar di-dewarp.
+  # Stream 2 sebaiknya H.264 agar semua browser bisa memutarnya.
   # ------------------------------------------------------------------
 
   # cam01:    rtsp://USER:PASS@192.168.1.101:554/cam/realmonitor?channel=1&subtype=1
@@ -44,3 +54,8 @@ streams:
 
   # cam02:    rtsp://USER:PASS@192.168.1.102:554/cam/realmonitor?channel=1&subtype=1
   # cam02_hd: rtsp://USER:PASS@192.168.1.102:554/cam/realmonitor?channel=1&subtype=0
+
+  # --- contoh campuran ---
+  # cam03:    rtsp://USER:PASS@192.168.1.103:554/MediaInput/h264/stream_2     # i-PRO
+  # cam03_hd: rtsp://USER:PASS@192.168.1.103:554/MediaInput/h264/stream_1
+  # cam04:    rtsp://USER:PASS@192.168.1.104:554/cam/realmonitor?channel=1&subtype=1   # fisheye Dahua (lingkaran mentah)

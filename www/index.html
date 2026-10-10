@@ -244,6 +244,11 @@
     <span class="dot" id="vdot"></span>
     <span class="name" id="vname"></span>
     <span class="badge" id="vquality"></span>
+    <span class="group" id="vfe" hidden role="group" aria-label="Tampilan fisheye">
+      <button data-fe="raw" aria-pressed="false" title="Gambar lingkaran asli">Asli</button>
+      <button data-fe="view" aria-pressed="false" title="Tampilan terarah: seret untuk menggeser, roda mouse untuk zoom">Terarah</button>
+      <button data-fe="pano" aria-pressed="false" title="Panorama 360° (kamera langit-langit)">Panorama</button>
+    </span>
     <span class="spacer"></span>
     <a id="vnvr" class="btn" target="_blank" rel="noopener" hidden>Playback NVR</a>
     <button id="vclose" title="Tutup (Esc)">Tutup</button>
@@ -299,6 +304,7 @@
 <script src="./config.js"></script>
 <script type="module">
 import {VideoRTC} from './video-rtc.js';
+import {Dewarp} from './dewarp.js';
 
 // Pemutar tanpa kontrol bawaan, tanpa suara (live view CCTV)
 class CamPlayer extends VideoRTC {
@@ -311,7 +317,7 @@ class CamPlayer extends VideoRTC {
 customElements.define('cam-player', CamPlayer);
 
 const cfg = Object.assign({
-  title: 'CCTV Multiview', nvrUrl: '', bridgeUrl: '', nvrCam: {}, names: {}, order: [], hide: [],
+  title: 'CCTV Multiview', nvrUrl: '', bridgeUrl: '', nvrCam: {}, fisheye: {}, names: {}, order: [], hide: [],
   hdSuffix: '_hd', mode: 'mse,webrtc', layout: 'auto', rotateSeconds: 15,
 }, window.MULTIVIEW_CONFIG || {});
 
@@ -386,7 +392,7 @@ function makePlayer(stream) {
 }
 
 function clearGrid() {
-  for (const t of state.tiles) t.el.remove();   // memutus websocket
+  for (const t of state.tiles) { if (t.dewarp) t.dewarp.destroy(); t.el.remove(); }   // memutus websocket
   state.tiles = [];
   grid.replaceChildren();
 }
@@ -447,7 +453,13 @@ function renderPage() {
     fig.append(player, bar, msg);
     fig.addEventListener('dblclick', () => openViewer(cam));
     grid.append(fig);
-    state.tiles.push({el: fig, player, msg, last: -1, moved: performance.now(), live: false});
+    const tile = {el: fig, player, msg, last: -1, moved: performance.now(), live: false, dewarp: null};
+    const fe = cfg.fisheye[cam.id];
+    if (fe && fe.tile !== 'raw' && state.tiles.filter(x => x.dewarp).length < 6 && player.video) {
+      tile.dewarp = new Dewarp(player.video, player, Object.assign({}, fe, {mode: fe.tile || 'view', interactive: false}));
+      if (!tile.dewarp.ok) tile.dewarp = null;       // WebGL tidak tersedia: gambar asli tetap tampil
+    }
+    state.tiles.push(tile);
   }
   updateChrome();
 }
@@ -499,7 +511,14 @@ document.addEventListener('visibilitychange', () => {
 
 // ---------- viewer ----------
 let viewerT = null;
-let viewerCam = null;
+let viewerCam = null, viewerFe = null;
+function markFe() {
+  for (const b of $('vfe').querySelectorAll('button')) b.setAttribute('aria-pressed', String(!!viewerFe && b.dataset.fe === viewerFe.mode));
+}
+$('vfe').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-fe]');
+  if (b && viewerFe) { viewerFe.setMode(b.dataset.fe); markFe(); }
+});
 function openViewer(cam) {
   state.viewerOpen = true;
   viewerCam = cam;
@@ -513,6 +532,17 @@ function openViewer(cam) {
   $('vquality').textContent = cam.hd ? 'Stream utama' : 'Stream 2 (stream utama belum diatur)';
   const player = makePlayer(stream);
   $('vbody').replaceChildren(player);
+  const fe = cfg.fisheye[cam.id];
+  viewerFe = null;
+  if (fe && player.video) {
+    const d = new Dewarp(player.video, player, Object.assign({}, fe, {mode: fe.mode || 'view', interactive: true}));
+    if (d.ok) viewerFe = d;
+  }
+  $('vfe').hidden = !viewerFe;
+  if (viewerFe) {
+    $('vfe').querySelector('[data-fe="pano"]').hidden = (fe.mount === 'wall');
+    markFe();
+  }
   viewerT = {el: viewer, player, msg: {}, last: -1, moved: performance.now(), live: false};
   viewer.classList.add('show');
   $('vclose').focus();
@@ -522,6 +552,8 @@ function closeViewer() {
   state.viewerOpen = false;
   ptzStop();
   viewerCam = null;
+  if (viewerFe) { viewerFe.destroy(); viewerFe = null; }
+  $('vfe').hidden = true;
   $('ptz').hidden = true;
   viewer.classList.remove('show');
   if (viewerT) viewerT.player.remove();
@@ -624,7 +656,7 @@ async function bapi(path, opts = {}) {
   if (!r.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
   return j;
 }
-const ptzCams = new Set();
+const ptzCams = new Set(), ptzType = {};
 
 // ---------- PTZ ----------
 let ptzCur = null, ptzQueue = Promise.resolve();
@@ -636,6 +668,7 @@ function ptzCall(qs) {
 function ptzShow(cam) {
   ptzErr('');
   $('ptz').hidden = !(bridge && ptzCams.has(cam.id));
+  $('ptzzf').querySelectorAll('[data-dir^="focus"]').forEach(b => { b.hidden = ptzType[cam.id] === 'onvif'; });   // ONVIF PTZ tidak punya fokus
 }
 function ptzStart(dir) {
   if (!viewerCam) return;
@@ -667,7 +700,7 @@ $('ptzgo').addEventListener('click', () => {
 });
 async function loadPtz() {
   if (!bridge) return;
-  try { for (const id of (await bapi('api/ptz/cams')).cams || []) ptzCams.add(id); } catch {}
+  try { const j = await bapi('api/ptz/cams'); for (const id of j.cams || []) ptzCams.add(id); Object.assign(ptzType, j.types || {}); } catch {}
 }
 
 // ---------- peta denah ----------

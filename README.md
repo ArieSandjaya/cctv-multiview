@@ -45,7 +45,8 @@ streams:
 - **Perbesar:** klik dua kali pada tile (atau ikon panah di pojok tile). Gambar memakai stream utama (`_hd`) jika ada. `Esc` untuk menutup. Saat satu kamera dibuka, tile lain berhenti ditarik agar PC tidak berat.
 - **Layar penuh:** tombol atau tombol `F`. Di layar penuh, header menghilang saat mouse diam (cocok untuk monitor dinding).
 - **Playback NVR:** isi `nvrUrl` di `www/config.js`. Tanpa NvrBridge, tombol hanya membuka web NX510 di tab baru. Dengan NvrBridge (folder `nvr-bridge/`), isi `nvrUrl` dengan alamat NvrBridge dan `nvrCam` dengan pasangan nama stream dan nomor kamera di NVR; tiap tile lalu punya tombol **Playback** yang membuka rekaman kamera itu di halaman playback.
-- **PTZ:** buka satu kamera PTZ (klik dua kali). Panel di pojok kanan bawah: 8 arah, zoom, fokus, kecepatan, dan preset. Butuh NvrBridge, lihat `nvr-bridge/README.md`.
+- **PTZ:** buka satu kamera PTZ (klik dua kali). Panel di pojok kanan bawah: 8 arah, zoom, fokus, kecepatan, dan preset. Mendukung kamera Dahua (seri E), i-PRO/Panasonic lewat ONVIF, dan merek lain yang mendukung ONVIF. Butuh NvrBridge, lihat `nvr-bridge/README.md`.
+- **Fisheye:** kamera fisheye yang mengirim gambar lingkaran mentah didaftarkan di `fisheye` pada `www/config.js` (`mount: "ceiling"` atau `"wall"`, `fov`). Tile menampilkan hasil dewarp; saat diperbesar ada tombol **Asli / Terarah / Panorama**. Di mode Terarah, seret untuk menggeser dan putar roda mouse untuk zoom. Dewarp berjalan di browser (WebGL), maksimal 6 kamera fisheye per halaman. Fisheye yang sudah di-dewarp oleh kameranya tidak perlu didaftarkan.
 - **Peta denah:** tombol **Peta** di header. Unggah gambar denah, letakkan ikon kamera, klik ikon untuk membuka kamera. Butuh NvrBridge.
 - Titik di tiap tile: hijau = gambar bergerak, kuning = menghubungkan, merah = tidak ada sinyal.
 - Pintasan: `A` auto, `1`–`4` layout, `Spasi` putar otomatis, `F` layar penuh.

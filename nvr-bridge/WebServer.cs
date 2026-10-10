@@ -144,7 +144,8 @@ namespace NvrBridge
                 }
                 else if (path == "/api/ptz/cams" && method == "GET")
                 {
-                    await SendJsonAsync(res, 200, "{\"cams\":[" + string.Join(",", ptz.CameraIds.Select(Json.Q)) + "]}").ConfigureAwait(false);
+                    await SendJsonAsync(res, 200, "{\"cams\":[" + string.Join(",", ptz.CameraIds.Select(Json.Q)) + "],\"types\":{" +
+                        string.Join(",", ptz.CameraIds.Select(id => Json.Q(id) + ":" + Json.Q(ptz.TypeOf(id)))) + "}}").ConfigureAwait(false);
                 }
                 else if (path == "/api/ptz")
                 {

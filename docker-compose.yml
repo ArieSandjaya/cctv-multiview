@@ -1,0 +1,13 @@
+services:
+  go2rtc:
+    image: alexxit/go2rtc:latest      # untuk versi tetap, ganti latest dengan nomor versi
+    container_name: go2rtc
+    restart: unless-stopped
+    ports:
+      - "1984:1984"                   # halaman multiview + API
+      - "8554:8554"                   # RTSP ulang (opsional)
+      - "8555:8555/tcp"               # WebRTC
+      - "8555:8555/udp"
+    volumes:
+      - ./go2rtc.yaml:/config/go2rtc.yaml
+      - ./www:/www:ro

@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>7.3</LangVersion>
+    <AssemblyName>NvrBridge</AssemblyName>
+    <RootNamespace>NvrBridge</RootNamespace>
+    <Nullable>disable</Nullable>
+    <Deterministic>true</Deterministic>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="web\**" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="nvrbridge.config" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

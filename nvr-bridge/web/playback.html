@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Playback NVR</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0b0e12; --panel: #12161c; --line: #232a33; --text: #e6eaf0; --muted: #8b95a3;
+    --accent: #4cc2ff; --ok: #3ddc84; --bad: #ff5c5c; --warn: #f5b83d;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body { background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  h1 { margin: 0; font-size: 15px; font-weight: 600; }
+  .muted { color: var(--muted); font-size: 12px; }
+  main { max-width: 1100px; margin: 0 auto; padding: 16px; }
+  form { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; align-items: end; margin-bottom: 12px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  select, input, button, a.btn {
+    font: inherit; color: var(--text); background: #181e26; border: 1px solid var(--line);
+    border-radius: 6px; padding: 7px 10px; min-height: 36px; width: 100%;
+  }
+  button, a.btn { cursor: pointer; text-decoration: none; text-align: center; display: inline-flex; align-items: center; justify-content: center; width: auto; }
+  button.primary { background: var(--accent); color: #04121c; border-color: var(--accent); font-weight: 600; }
+  button:hover:not(:disabled), a.btn:hover { border-color: #3a4552; filter: brightness(1.1); }
+  button:disabled { opacity: .45; cursor: default; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #status { min-height: 22px; margin: 4px 0 10px; }
+  #status.err { color: var(--bad); }
+  #status.ok { color: var(--ok); }
+  .stage { background: #000; border: 1px solid var(--line); border-radius: 6px; aspect-ratio: 16 / 9; width: 100%; display: grid; place-items: center; overflow: hidden; }
+  video { width: 100%; height: 100%; background: #000; }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+  .bar .grow { flex: 1 1 auto; }
+  .seg[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Playback NVR</h1>
+  <span class="muted" id="range"></span>
+</header>
+
+<main>
+  <form id="form">
+    <div><label for="cam">Kamera</label><select id="cam"></select></div>
+    <div><label for="date">Tanggal</label><input type="date" id="date" required></div>
+    <div><label for="time">Jam mulai</label><input type="time" id="time" required></div>
+    <div><label for="minutes">Durasi</label><select id="minutes"></select></div>
+    <div><button type="submit" class="primary" id="go">Ambil rekaman</button></div>
+  </form>
+
+  <div id="status" class="muted" role="status" aria-live="polite"></div>
+
+  <div class="stage" id="stage"><span class="muted" id="hint">Pilih kamera dan waktu, lalu tekan "Ambil rekaman".</span></div>
+
+  <div class="bar" id="bar" hidden>
+    <button type="button" id="prev">‹ Klip sebelumnya</button>
+    <button type="button" id="next">Klip berikutnya ›</button>
+    <span id="segs"></span>
+    <span class="grow muted" id="clipinfo"></span>
+    <a class="btn" id="dl" download>Unduh MP4</a>
+  </div>
+  <p class="muted">Waktu di halaman ini mengikuti jam komputer Anda. Rekaman diunduh dari NVR terlebih dahulu, lalu diputar.</p>
+</main>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var info = null, lastStart = null, lastMinutes = 0, pollTimer = null, files = [], segIndex = 0;
+
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  function setStatus(msg, cls) { var s = $('status'); s.textContent = msg || ''; s.className = cls || 'muted'; }
+  function fmtLocal(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()); }
+
+  function api(path, opts) {
+    return fetch(path, opts).then(function (r) {
+      return r.json().catch(function () { return null; }).then(function (j) {
+        if (!r.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
+        return j;
+      });
+    });
+  }
+
+  function setInputs(d) {
+    $('date').value = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+    $('time').value = pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+
+  function readStart() {
+    var d = new Date($('date').value + 'T' + $('time').value);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  function busy(b) {
+    $('go').disabled = b; $('prev').disabled = b; $('next').disabled = b;
+  }
+
+  function fetchClip(start) {
+    var minutes = parseInt($('minutes').value, 10);
+    var cam = $('cam').value;
+    stopPoll();
+    busy(true);
+    setStatus('Meminta rekaman dari NVR…');
+    api('/api/clip?cam=' + encodeURIComponent(cam) + '&start=' + encodeURIComponent(start.toISOString()) + '&minutes=' + minutes,
+        { method: 'POST', headers: { 'X-NvrBridge': '1' } })
+      .then(function (j) { lastStart = start; lastMinutes = minutes; poll(j.id); })
+      .catch(function (e) { busy(false); setStatus(e.message, 'err'); });
+  }
+
+  function poll(id) {
+    api('/api/job?id=' + id).then(function (j) {
+      if (j.state === 'done') { busy(false); showClip(j.files); return; }
+      if (j.state === 'error') { busy(false); setStatus(j.message || 'Gagal mengambil rekaman.', 'err'); return; }
+      var mb = (j.bytes / 1048576).toFixed(1);
+      setStatus((j.state === 'queued' ? 'Menunggu giliran… ' : 'Mengunduh dari NVR… ') + mb + ' MB');
+      pollTimer = setTimeout(function () { poll(id); }, 1000);
+    }).catch(function (e) { busy(false); setStatus(e.message, 'err'); });
+  }
+
+  function stopPoll() { if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; } }
+
+  function showClip(list) {
+    files = list; segIndex = 0;
+    var end = new Date(lastStart.getTime() + lastMinutes * 60000);
+    $('clipinfo').textContent = fmtLocal(lastStart) + ' – ' + pad(end.getHours()) + ':' + pad(end.getMinutes()) + ' (jam lokal)';
+    setStatus('Rekaman siap.', 'ok');
+    $('bar').hidden = false;
+    renderSegs();
+    playSeg(0);
+  }
+
+  function renderSegs() {
+    var box = $('segs');
+    box.textContent = '';
+    if (files.length < 2) return;
+    files.forEach(function (f, i) {
+      var b = document.createElement('button');
+      b.type = 'button'; b.className = 'seg'; b.textContent = 'Bagian ' + (i + 1);
+      b.setAttribute('aria-pressed', String(i === segIndex));
+      b.onclick = function () { playSeg(i); };
+      box.appendChild(b);
+    });
+  }
+
+  function playSeg(i) {
+    segIndex = i;
+    var stage = $('stage');
+    stage.textContent = '';
+    var v = document.createElement('video');
+    v.controls = true; v.playsInline = true; v.autoplay = true; v.src = files[i];
+    v.addEventListener('ended', function () { if (segIndex + 1 < files.length) playSeg(segIndex + 1); });
+    v.addEventListener('error', function () {
+      setStatus('Browser tidak bisa memutar klip ini (kodek mungkin H.265). Gunakan "Unduh MP4" lalu putar di VLC.', 'err');
+    });
+    stage.appendChild(v);
+    $('dl').href = files[i];
+    renderSegs();
+  }
+
+  function shift(minutesDelta) {
+    var s = lastStart || readStart();
+    if (!s) return;
+    var d = new Date(s.getTime() + minutesDelta * 60000);
+    setInputs(d);
+    fetchClip(d);
+  }
+
+  $('form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var s = readStart();
+    if (!s) { setStatus('Isi tanggal dan jam mulai.', 'err'); return; }
+    fetchClip(s);
+  });
+  $('next').onclick = function () { shift(lastMinutes || parseInt($('minutes').value, 10)); };
+  $('prev').onclick = function () { shift(-(lastMinutes || parseInt($('minutes').value, 10))); };
+
+  api('/api/info').then(function (i) {
+    info = i;
+    document.title = i.title; $('title').textContent = i.title;
+    var camSel = $('cam');
+    i.cameras.forEach(function (c) {
+      var o = document.createElement('option'); o.value = c.id; o.textContent = c.name; camSel.appendChild(o);
+    });
+    var want = new URLSearchParams(location.search).get('cam');
+    if (want && i.cameras.some(function (c) { return String(c.id) === want; })) camSel.value = want;
+
+    var opts = [1, 2, 3, 5, 10, 15, 30, 60].filter(function (m) { return m <= i.maxMinutes; });
+    if (opts.indexOf(i.maxMinutes) < 0) opts.push(i.maxMinutes);
+    var ms = $('minutes');
+    opts.forEach(function (m) { var o = document.createElement('option'); o.value = m; o.textContent = m + ' menit'; ms.appendChild(o); });
+    ms.value = String(opts.indexOf(3) >= 0 ? 3 : opts[0]);
+
+    setInputs(new Date(Date.now() - 10 * 60000));
+  }).catch(function (e) { setStatus(e.message, 'err'); });
+
+  api('/api/range').then(function (r) {
+    if (r.oldest && r.latest) $('range').textContent = 'Rekaman tersedia: ' + r.oldest + ' – ' + r.latest + ' (jam NVR)';
+  }).catch(function () { /* opsional */ });
+})();
+</script>
+</body>
+</html>

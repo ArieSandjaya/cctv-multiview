@@ -1,0 +1,46 @@
+# go2rtc: menarik stream RTSP dari kamera dan menyajikannya ke browser.
+# Satu-satunya file yang perlu diedit untuk menambah atau mengubah kamera.
+# Setelah diubah: restart go2rtc (docker compose restart).
+
+api:
+  listen: ":1984"
+  static_dir: /www            # isi folder www/ (halaman multiview). Tanpa Docker: ganti menjadi "www"
+  # Disarankan jika server bisa diakses dari jaringan lain:
+  # username: admin
+  # password: ganti-dengan-password-kuat
+
+rtsp:
+  listen: ":8554"             # opsional: stream ulang untuk VLC dan aplikasi lain
+
+webrtc:
+  listen: ":8555"
+  # Hanya perlu jika memakai mode webrtc di dalam Docker (bridge network).
+  # candidates:
+  #   - 192.168.1.10:8555     # IP server ini
+
+log:
+  level: info
+
+streams:
+  # ------------------------------------------------------------------
+  # Aturan penamaan:
+  #   camNN      = stream 2 (sub stream, kecil) -> tampil sebagai tile di multiview
+  #   camNN_hd   = stream 1 (utama, besar)      -> dipakai saat tile diperbesar
+  # Stream "_hd" itu opsional. Tanpa itu, tile diperbesar memakai stream 2.
+  #
+  # Ganti USER, PASS, dan IP. Jika password mengandung karakter khusus
+  # (@ : / # ?), tulis dalam bentuk URL-encoded, misalnya @ menjadi %40.
+  #
+  # Pola URL RTSP kamera i-PRO/Panasonic yang umum (cek kembali di menu
+  # kamera atau dengan ONVIF Device Manager, karena bisa beda per model/firmware):
+  #   stream 1: rtsp://USER:PASS@IP:554/cam/realmonitor?channel=1&subtype=0
+  #   stream 2: rtsp://USER:PASS@IP:554/cam/realmonitor?channel=1&subtype=1
+  # Untuk kodek H.265 ganti "h264" menjadi "h265". Untuk multiview, stream 2
+  # sebaiknya H.264 agar semua browser bisa memutarnya.
+  # ------------------------------------------------------------------
+
+  # cam01:    rtsp://USER:PASS@192.168.1.101:554/cam/realmonitor?channel=1&subtype=1
+  # cam01_hd: rtsp://USER:PASS@192.168.1.101:554/cam/realmonitor?channel=1&subtype=0
+
+  # cam02:    rtsp://USER:PASS@192.168.1.102:554/cam/realmonitor?channel=1&subtype=1
+  # cam02_hd: rtsp://USER:PASS@192.168.1.102:554/cam/realmonitor?channel=1&subtype=0

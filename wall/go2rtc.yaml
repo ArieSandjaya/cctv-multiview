@@ -1,0 +1,36 @@
+# go2rtc untuk PC video wall (CctvViewer). Satu-satunya file untuk menambah/mengubah kamera.
+# Setelah diubah: tutup CctvViewer (tombol "Keluar") lalu buka lagi.
+#
+# File ini berisi password kamera: batasi akses folder, dan jangan masukkan ke Git dengan password asli.
+
+api:
+  listen: "127.0.0.1:1984"     # hanya PC ini. API go2rtc membuka kredensial kamera, jangan diekspos ke jaringan.
+  static_dir: www              # halaman multiview (relatif terhadap folder CctvViewer.exe)
+
+rtsp:
+  listen: ""                   # dimatikan: tidak perlu stream ulang dan menghemat port
+
+webrtc:
+  listen: "127.0.0.1:8555"
+  candidates:
+    - 127.0.0.1:8555
+
+log:
+  level: warn
+
+streams:
+  # Urutan layar: stream diurut menurut nama. cam01-cam16 -> layar 1, cam17-cam32 -> layar 2, cam33-cam48 -> layar 3.
+  # Gunakan nomor dua digit (cam01, cam02, ... cam48) agar urutannya benar.
+  #   camNN    = sub stream (kecil, H.264) -> tampil di tile
+  #   camNN_hd = stream utama                -> dipakai saat satu tile diperbesar (opsional)
+  #
+  # Dahua/Panasonic seri E:  rtsp://USER:PASS@IP:554/cam/realmonitor?channel=1&subtype=1   (sub)  /  subtype=0 (utama)
+  # i-PRO / Panasonic i-PRO: rtsp://USER:PASS@IP:554/MediaInput/h264/stream_2 (sub)  /  stream_1 (utama)
+  # Password dengan @ : / # ? ditulis URL-encoded (@ menjadi %40).
+  #
+  # Saran sub stream untuk 48 tile: H.264, 640x360 atau lebih kecil, 10-15 fps, 512-768 kbps.
+
+  # cam01:    rtsp://USER:PASS@192.168.1.101:554/cam/realmonitor?channel=1&subtype=1
+  # cam01_hd: rtsp://USER:PASS@192.168.1.101:554/cam/realmonitor?channel=1&subtype=0
+  # cam02:    rtsp://USER:PASS@192.168.1.102:554/MediaInput/h264/stream_2
+  # cam02_hd: rtsp://USER:PASS@192.168.1.102:554/MediaInput/h264/stream_1

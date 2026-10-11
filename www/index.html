@@ -197,6 +197,20 @@
   #mapmsg.err { color: var(--bad); }
   #mapempty { color: var(--muted); padding: 24px; text-align: center; }
 
+  /* ---------- Mode layar (CctvViewer: ?screen=N) ---------- */
+  body.wall header {
+    position: absolute; top: 0; left: 0; right: 0; z-index: 5;
+    transform: translateY(0); transition: transform .25s ease;
+  }
+  body.wall.idle header { transform: translateY(-110%); margin-top: 0; }
+  body.wall main { flex: 1 1 100%; }
+  body.wall #layouts, body.wall #pager, body.wall #fs { display: none; }
+  .wallonly { display: none; }
+  body.wall .wallonly { display: inline-flex; }
+  #pbview { position: fixed; inset: 0; z-index: 12; display: none; flex-direction: column; background: #000f; }
+  #pbview.show { display: flex; }
+  #pbview iframe { flex: 1 1 auto; min-height: 0; border: 0; background: #0b0e12; width: 100%; }
+
   @media (max-width: 640px) {
     header { padding: 8px 10px; gap: 8px 10px; }
     .hide-sm { display: none; }
@@ -229,6 +243,8 @@
     <a id="nvr" class="btn" target="_blank" rel="noopener" hidden title="Buka web NX510 untuk playback rekaman">Playback NVR</a>
     <button id="mapbtn" hidden title="Peta denah">Peta</button>
     <button id="fs" title="Layar penuh (F)">Layar penuh</button>
+    <button id="reload" class="wallonly" title="Muat ulang layar ini (F5)">Muat ulang</button>
+    <button id="quit" class="wallonly" title="Tutup aplikasi CctvViewer (semua layar)">Keluar</button>
   </div>
 
   <span class="meta hide-sm" id="clock"></span>
@@ -278,6 +294,15 @@
   </div>
 </div>
 
+<div id="pbview" role="dialog" aria-modal="true" aria-label="Playback rekaman">
+  <div class="vbar">
+    <span class="name" id="pbname">Playback rekaman</span>
+    <span class="spacer"></span>
+    <button id="pbclose" title="Tutup (Esc)">Tutup</button>
+  </div>
+  <iframe id="pbframe" title="Playback" referrerpolicy="no-referrer"></iframe>
+</div>
+
 <div id="mapview" role="dialog" aria-modal="true" aria-label="Peta denah">
   <div class="vbar">
     <select id="mapsel" aria-label="Pilih peta"></select>
@@ -317,9 +342,30 @@ class CamPlayer extends VideoRTC {
 customElements.define('cam-player', CamPlayer);
 
 const cfg = Object.assign({
-  title: 'CCTV Multiview', nvrUrl: '', bridgeUrl: '', nvrCam: {}, fisheye: {}, names: {}, order: [], hide: [],
-  hdSuffix: '_hd', mode: 'mse,webrtc', layout: 'auto', rotateSeconds: 15,
+  title: 'CCTV Multiview', nvrUrl: '', bridgeUrl: '', bridgePort: 8090, nvrCam: {}, fisheye: {}, names: {}, order: [], hide: [],
+  hdSuffix: '_hd', mode: 'mse,webrtc', layout: 'auto', rotateSeconds: 15, dewarpMax: 6,
 }, window.MULTIVIEW_CONFIG || {});
+
+// Mode layar: dibuka oleh CctvViewer dengan ?screen=N&screens=3&per=16&ctl=1985&reload=360
+// Layar N menampilkan kamera ke-((N-1)*per+1) sampai (N*per), tetap dalam grid per-kolom, tanpa halaman.
+const qp = new URLSearchParams(location.search);
+const intq = (k, d, lo, hi) => { const v = parseInt(qp.get(k), 10); return v >= lo && v <= hi ? v : d; };
+const wall = qp.has('screen') ? {
+  screen: intq('screen', 1, 1, 16),
+  screens: intq('screens', 1, 1, 16),
+  per: intq('per', 16, 1, 64),
+  ctl: intq('ctl', 0, 0, 65535),
+  reload: intq('reload', 0, 0, 10080),       // menit; 0 = tidak dimuat ulang berkala
+} : null;
+if (wall) {
+  wall.cols = intq('cols', Math.ceil(Math.sqrt(wall.per)), 1, 16);
+  wall.rows = Math.ceil(wall.per / wall.cols);
+  document.body.classList.add('wall');
+}
+// "auto" = NvrBridge di PC yang sama dengan halaman ini
+const autoBridge = location.protocol + '//' + location.hostname + ':' + (+cfg.bridgePort || 8090) + '/';
+if (cfg.nvrUrl === 'auto') cfg.nvrUrl = autoBridge;
+if (cfg.bridgeUrl === 'auto') cfg.bridgeUrl = autoBridge;
 
 const $ = (id) => document.getElementById(id);
 const grid = $('grid'), notice = $('notice'), viewer = $('viewer');
@@ -330,7 +376,8 @@ const store = {
   set(k, v) { try { localStorage.setItem('mv.' + k, v); } catch {} },
 };
 const state = {
-  cams: [],                 // [{id, name, hd}]
+  cams: [],                 // kamera yang tampil di halaman/layar ini [{id, name, hd}]
+  allCams: [],              // semua kamera dari go2rtc
   layout: store.get('layout', String(cfg.layout)),
   page: 0,
   rotate: store.get('rotate', '0') === '1',
@@ -341,7 +388,8 @@ if (!['auto', '1', '2', '3', '4'].includes(state.layout)) state.layout = 'auto';
 
 document.title = cfg.title;
 $('title').textContent = cfg.title;
-if (cfg.nvrUrl) { $('nvr').href = cfg.nvrUrl; $('nvr').hidden = false; }
+function showNvrBtn() { $('nvr').hidden = !cfg.nvrUrl; if (cfg.nvrUrl) $('nvr').href = cfg.nvrUrl; }
+showNvrBtn();
 
 // Tautan playback per kamera: nvrUrl + ?cam=<nomor kamera di NVR> (jika ada di cfg.nvrCam)
 function playbackHref(id) {
@@ -372,6 +420,7 @@ async function loadCams() {
 
 // ---------- layout ----------
 function dims(n) {
+  if (wall) return [wall.cols, wall.rows];
   const L = state.layout;
   if (L === 'auto') {
     if (n <= 1) return [1, 1];
@@ -441,7 +490,7 @@ function renderPage() {
       const pb = document.createElement('a');
       pb.className = 'btn-mini';
       pb.href = pbHref; pb.target = '_blank'; pb.rel = 'noopener';
-      pb.textContent = 'Playback';
+      pb.textContent = 'Playback'; pb.dataset.title = 'Playback: ' + cam.name;
       pb.title = 'Buka rekaman kamera ini';
       actions.append(pb);
     }
@@ -455,7 +504,7 @@ function renderPage() {
     grid.append(fig);
     const tile = {el: fig, player, msg, last: -1, moved: performance.now(), live: false, dewarp: null};
     const fe = cfg.fisheye[cam.id];
-    if (fe && fe.tile !== 'raw' && state.tiles.filter(x => x.dewarp).length < 6 && player.video) {
+    if (fe && fe.tile !== 'raw' && state.tiles.filter(x => x.dewarp).length < (+cfg.dewarpMax || 0) && player.video) {
       tile.dewarp = new Dewarp(player.video, player, Object.assign({}, fe, {mode: fe.tile || 'view', interactive: false}));
       if (!tile.dewarp.ok) tile.dewarp = null;       // WebGL tidak tersedia: gambar asli tetap tampil
     }
@@ -477,9 +526,15 @@ function updateChrome() {
 function updateCount() {
   const total = state.cams.length;
   const live = state.tiles.filter(t => t.live).length;
-  $('count').textContent = total
+  let t = total
     ? `${total} kamera · ${live}/${state.tiles.length} tampil aktif`
     : '';
+  if (wall) {
+    t = `Layar ${wall.screen}/${wall.screens} · ` + (t || 'tidak ada kamera untuk layar ini');
+    const extra = state.allCams.length - wall.screens * wall.per;
+    if (wall.screen === wall.screens && extra > 0) t += ` · ${extra} kamera lain tidak muat di ${wall.screens} layar`;
+  }
+  $('count').textContent = t;
 }
 
 // ---------- status tile (gambar bergerak = aktif) ----------
@@ -563,6 +618,31 @@ function closeViewer() {
 }
 $('vclose').addEventListener('click', closeViewer);
 
+// ---------- playback dalam iframe (mode layar: tab baru tidak ada di kiosk) ----------
+let pbOpen = false;
+function openPlayback(href, title) {
+  pbOpen = true;
+  $('pbname').textContent = title || 'Playback rekaman';
+  $('pbframe').src = href;
+  $('pbview').classList.add('show');
+  $('pbclose').focus();
+}
+function closePlayback() {
+  if (!pbOpen) return;
+  pbOpen = false;
+  $('pbview').classList.remove('show');
+  $('pbframe').src = 'about:blank';
+}
+$('pbclose').addEventListener('click', closePlayback);
+if (wall) {
+  document.addEventListener('click', (e) => {
+    const a = e.target.closest('a[target="_blank"]');
+    if (!a || !a.href) return;
+    e.preventDefault();
+    openPlayback(a.href, a.dataset.title || 'Playback rekaman');
+  });
+}
+
 // ---------- kontrol ----------
 function go(delta) {
   const pages = pageCount();
@@ -605,8 +685,8 @@ function toggleFs() {
 document.addEventListener('keydown', (e) => {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.target.matches('input, select, textarea')) { if (e.key === 'Escape') e.target.blur(); return; }
-  if (e.key === 'Escape') return mapOpen ? closeMap() : closeViewer();
-  if (mapOpen) return;
+  if (e.key === 'Escape') return pbOpen ? closePlayback() : mapOpen ? closeMap() : closeViewer();
+  if (mapOpen || pbOpen) return;
   switch (e.key) {
     case 'ArrowLeft': go(-1); break;
     case 'ArrowRight': go(1); break;
@@ -622,9 +702,10 @@ let idleTimer = null;
 function wake() {
   document.body.classList.remove('idle');
   clearTimeout(idleTimer);
-  if (document.fullscreenElement) idleTimer = setTimeout(() => document.body.classList.add('idle'), 3000);
+  if (wall || document.fullscreenElement) idleTimer = setTimeout(() => document.body.classList.add('idle'), 3000);
 }
 document.addEventListener('mousemove', wake);
+if (wall) wake();
 document.addEventListener('fullscreenchange', wake);
 
 // Layout auto menyesuaikan orientasi layar
@@ -726,7 +807,7 @@ async function loadMaps() {
   mapData = sanitizeMaps(await bapi('api/maps'));
   mapDirty = false;
 }
-function camName(id) { const c = state.cams.find(x => x.id === id); return c ? c.name : id; }
+function camName(id) { const c = state.allCams.find(x => x.id === id); return c ? c.name : id; }
 
 function renderMapSelect() {
   const sel = $('mapsel');
@@ -736,8 +817,8 @@ function renderMapSelect() {
   sel.hidden = !mapData.maps.length;
   const cs = $('mapcam');
   const prev = cs.value;
-  cs.replaceChildren(...state.cams.map(c => { const o = document.createElement('option'); o.value = c.id; o.textContent = c.name; return o; }));
-  if (prev && state.cams.some(c => c.id === prev)) cs.value = prev;
+  cs.replaceChildren(...state.allCams.map(c => { const o = document.createElement('option'); o.value = c.id; o.textContent = c.name; return o; }));
+  if (prev && state.allCams.some(c => c.id === prev)) cs.value = prev;
 }
 function curMap() { return mapData.maps.find(m => m.id === mapCur) || null; }
 
@@ -803,7 +884,7 @@ $('mapwrap').addEventListener('click', (e) => {
     if (mk) return;                                   // pilih/geser ikon sudah ditangani pointerdown
     if (e.target === $('mapimg')) { placeFromEvent(e, $('mapcam').value); renderMap(); mapMsg('Belum disimpan.'); }
   } else if (mk) {
-    const cam = state.cams.find(c => c.id === mk.dataset.id);
+    const cam = state.allCams.find(c => c.id === mk.dataset.id);
     if (cam) { closeMap(); openViewer(cam); }
   }
 });
@@ -878,27 +959,68 @@ function showNotice(html) {
   notice.querySelector('.box').innerHTML = html;
   notice.classList.add('show');
 }
+let retryTimer = null;
+async function probeBridge() {
+  // Tombol Playback/PTZ/Peta hanya muncul jika NvrBridge benar-benar menjawab
+  const base = (cfg.bridgeUrl || cfg.nvrUrl || '');
+  if (!base) return;
+  const ctl = new AbortController();
+  const to = setTimeout(() => ctl.abort(), 2000);
+  try { const r = await fetch(base.replace(/\/?$/, '/') + 'api/info', {cache: 'no-store', signal: ctl.signal}); if (!r.ok) throw 0; }
+  catch { if (wall) { cfg.nvrUrl = ''; showNvrBtn(); } }
+  finally { clearTimeout(to); }
+}
 async function start() {
+  clearTimeout(retryTimer);
   notice.classList.remove('show');
   try {
-    state.cams = await loadCams();
+    state.allCams = await loadCams();
   } catch (err) {
     showNotice(`<h2>Tidak bisa menghubungi go2rtc</h2>
-      <p>Buka halaman ini lewat alamat go2rtc, misalnya <code>http://IP-SERVER:1984/</code>, bukan dari file HTML langsung. Pastikan go2rtc berjalan.</p>
+      <p>${wall ? 'Mencoba lagi otomatis…' : 'Buka halaman ini lewat alamat go2rtc, misalnya <code>http://IP-SERVER:1984/</code>, bukan dari file HTML langsung. Pastikan go2rtc berjalan.'}</p>
       <button id="retry">Coba lagi</button>`);
     $('retry').addEventListener('click', start);
+    if (wall) retryTimer = setTimeout(start, 5000);
     return;
   }
-  if (!state.cams.length) {
+  state.cams = wall ? state.allCams.slice((wall.screen - 1) * wall.per, wall.screen * wall.per) : state.allCams;
+  if (!state.allCams.length) {
     showNotice(`<h2>Belum ada kamera</h2>
       <p>Tambahkan stream di <code>go2rtc.yaml</code> pada bagian <code>streams:</code>, lalu restart go2rtc. Setiap stream tanpa akhiran <code>${cfg.hdSuffix}</code> akan tampil sebagai satu tile.</p>`);
     updateChrome();
+    if (wall) retryTimer = setTimeout(start, 10000);
     return;
   }
+  await probeBridge();
   renderPage();
   applyRotate();
   initBridge();
 }
+
+// ---------- kontrol mode layar ----------
+if (wall) {
+  $('title').textContent = cfg.title;
+  $('reload').addEventListener('click', () => location.reload());
+  $('quit').addEventListener('click', async () => {
+    if (!confirm('Tutup CctvViewer? Semua layar kamera akan berhenti.')) return;
+    if (!wall.ctl) return alert('Aplikasi peluncur tidak ditemukan. Tutup dengan Alt+F4.');
+    try {
+      await fetch('http://' + location.hostname + ':' + wall.ctl + '/quit', {method: 'POST', headers: {'X-CctvViewer': '1'}});
+    } catch { alert('Tidak bisa menghubungi aplikasi peluncur. Tutup dengan Alt+F4.'); }
+  });
+  // Muat ulang berkala agar tidak ada kebocoran memori setelah berhari-hari (tidak saat ada tampilan diperbesar/playback/peta)
+  if (wall.reload) {
+    const reloadWhenIdle = () => {
+      if (state.viewerOpen || pbOpen || mapOpen) return setTimeout(reloadWhenIdle, 60000);
+      location.reload();
+    };
+    setTimeout(reloadWhenIdle, wall.reload * 60000);
+  }
+  // Cegah menu klik kanan dan zoom yang tidak sengaja di kiosk
+  document.addEventListener('contextmenu', (e) => e.preventDefault());
+  addEventListener('wheel', (e) => { if (e.ctrlKey) e.preventDefault(); }, {passive: false});
+}
+
 start();
 </script>
 </body>

@@ -12,6 +12,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Reference Include="System.Net.Http" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Include="web\**" CopyToOutputDirectory="PreserveNewest" />
     <None Include="nvrbridge.config" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

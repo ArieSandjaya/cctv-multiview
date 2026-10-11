@@ -1,4 +1,33 @@
-# CCTV Multiview (go2rtc + halaman web)
+# CCTV Multiview (go2rtc + halaman web) dan CctvViewer
+
+## CctvViewer: buka satu aplikasi, semua kamera tampil di 3 monitor
+
+`CctvViewer.exe` (Windows, .NET Framework 4.8) menjalankan go2rtc dan NvrBridge, lalu membuka satu layar penuh per monitor.
+Default: 3 monitor × 16 kamera (grid 4×4) = 48 kamera. Layar 1 = `cam01`-`cam16`, layar 2 = `cam17`-`cam32`, layar 3 = `cam33`-`cam48`.
+
+**Pasang di PC video wall**
+1. Di PC pengembang: jalankan `build.cmd` (butuh .NET SDK). Hasilnya folder `dist\`. Salin ke PC video wall, misalnya `C:\CctvViewer`.
+2. Pasang Google Chrome di PC video wall (Edge juga dikenali, Chrome disarankan).
+3. Edit `go2rtc.yaml` (daftar kamera bernama `cam01` ... `cam48`, sub stream H.264 640x360, 10-15 fps).
+4. Opsional: `NvrBridge\nvrbridge.config` (NX510, PTZ, peta) dan `www\config.js` (nama kamera).
+5. Windows: Settings > Display > **Extend these displays**, skala **100%** di ketiga monitor, hubungkan ketiga HDMI.
+6. Jalankan `CctvViewer.exe --check` untuk memeriksa monitor, browser, dan berkas, lalu buka `CctvViewer.exe`.
+7. Agar otomatis saat Windows login: `CctvViewer.exe --autostart on` (login Windows otomatis diatur terpisah).
+
+**Memakai**: gerakkan mouse ke atas layar untuk memunculkan header (Playback, Peta, Muat ulang, Keluar). Klik dua kali tile untuk memperbesar (stream utama + PTZ), `Esc` menutup. `Keluar` (atau `CctvViewer.exe --stop`) menutup semuanya.
+
+**Ketahanan**: go2rtc, NvrBridge, dan tiap layar dijaga; jika berhenti atau jendela ditutup, dibuka lagi otomatis (jeda bertahap). Jika monitor terlambat terdeteksi atau dicabut-dipasang, jendela dikembalikan ke monitornya. Halaman memuat ulang diri tiap 6 jam (`ReloadMinutes`). Log ada di folder `data\` (`cctvviewer.log`, `go2rtc.log`, `nvrbridge.log`; maks 5 MB + 1 cadangan).
+
+**Pengaturan** di `cctvviewer.config`: `Screens`, `CamsPerScreen`, `Monitors` (manual jika urutan monitor salah), `Browser`, `ReopenClosedScreens`, `ReloadMinutes`, dll., semuanya dijelaskan di berkasnya.
+
+**Kapasitas**: 48 sub stream berarti 48 decoder video di tiga proses browser. Gunakan decoder perangkat keras (GPU Intel/NVIDIA/AMD yang cukup baru) dan sub stream H.264 640x360 10-15 fps. Jika tersendat, turunkan resolusi/fps sub stream di kamera dulu. Pantau CPU/GPU di Task Manager saat uji pertama.
+
+**Keamanan**: pada konfigurasi wall, go2rtc hanya mendengarkan 127.0.0.1 dan RTSP ulang dimatikan. `go2rtc.yaml` dan `nvrbridge.config` berisi password: jangan di-commit dengan password asli.
+
+**Status pengujian**: logika peluncur (start/restart/keluar, 3 layar × 16 kamera dari 48 stream, header, playback, deteksi NvrBridge) diuji di Linux dengan stub Win32. Belum diuji di Windows asli: penempatan di 3 monitor, job object, decoding 48 stream H.264, dan build net48. Lakukan uji pertama langsung di PC video wall.
+
+---
+
 
 Multiview di browser untuk kamera i-PRO/Panasonic seri E. Kamera ditarik langsung lewat RTSP (stream 2 / sub stream), jadi tidak melewati ASM300 maupun NX510.
 

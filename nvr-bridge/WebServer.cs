@@ -113,8 +113,10 @@ namespace NvrBridge
                     if (method != "GET") { await SendTextAsync(res, 405, "text/plain", "Method not allowed").ConfigureAwait(false); return; }
                     string file = Path.Combine(cfg.WebDir, "playback.html");
                     if (!File.Exists(file)) { await SendTextAsync(res, 404, "text/plain", "playback.html tidak ditemukan di " + cfg.WebDir).ConfigureAwait(false); return; }
+                    // Halaman ini boleh disematkan (iframe) hanya oleh halaman multiview di AllowOrigin (mode CctvViewer).
+                    string ancestors = cfg.AllowOrigin.Length > 0 ? cfg.AllowOrigin : "'none'";
                     res.Headers["Content-Security-Policy"] =
-                        "default-src 'self'; media-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; frame-ancestors 'none'";
+                        "default-src 'self'; media-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; frame-ancestors " + ancestors;
                     await SendTextAsync(res, 200, "text/html", File.ReadAllText(file, Encoding.UTF8)).ConfigureAwait(false);
                 }
                 else if (path == "/api/info" && method == "GET")

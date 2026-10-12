@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -23,6 +24,9 @@ namespace NvrBridge
         readonly NvrClient nvr;
         readonly JobManager jobs;
         readonly PtzClient ptz;
+        readonly Scanner scanner;
+        readonly Action requestReload;
+        readonly object regLock = new object();
         readonly object mapsLock = new object();
         readonly HttpListener listener = new HttpListener();
         readonly CancellationTokenSource stop = new CancellationTokenSource();
@@ -32,8 +36,10 @@ namespace NvrBridge
         string rangeJson;
         readonly object rangeLock = new object();
 
-        public WebServer(AppConfig cfg, NvrClient nvr, JobManager jobs, PtzClient ptz)
+        public WebServer(AppConfig cfg, NvrClient nvr, JobManager jobs, PtzClient ptz, Scanner scanner, Action requestReload)
         {
+            this.scanner = scanner;
+            this.requestReload = requestReload;
             this.cfg = cfg;
             this.nvr = nvr;
             this.jobs = jobs;
@@ -108,16 +114,45 @@ namespace NvrBridge
                 string path = req.Url.AbsolutePath;
                 string method = req.HttpMethod;
 
-                if (path == "/" || path == "/playback.html")
+                if (path == "/" || path == "/playback.html" || path == "/setup.html")
                 {
                     if (method != "GET") { await SendTextAsync(res, 405, "text/plain", "Method not allowed").ConfigureAwait(false); return; }
-                    string file = Path.Combine(cfg.WebDir, "playback.html");
-                    if (!File.Exists(file)) { await SendTextAsync(res, 404, "text/plain", "playback.html tidak ditemukan di " + cfg.WebDir).ConfigureAwait(false); return; }
+                    string name = path == "/setup.html" ? "setup.html" : "playback.html";
+                    string file = Path.Combine(cfg.WebDir, name);
+                    if (!File.Exists(file)) { await SendTextAsync(res, 404, "text/plain", name + " tidak ditemukan di " + cfg.WebDir).ConfigureAwait(false); return; }
                     // Halaman ini boleh disematkan (iframe) hanya oleh halaman multiview di AllowOrigin (mode CctvViewer).
                     string ancestors = cfg.AllowOrigin.Length > 0 ? cfg.AllowOrigin : "'none'";
                     res.Headers["Content-Security-Policy"] =
                         "default-src 'self'; media-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; frame-ancestors " + ancestors;
                     await SendTextAsync(res, 200, "text/html", File.ReadAllText(file, Encoding.UTF8)).ConfigureAwait(false);
+                }
+                else if (path == "/api/cams" && method == "GET")
+                {
+                    var list = cfg.Reg != null ? cfg.Reg.Cams.Where(c => c.Enabled) : Enumerable.Empty<RegCam>();
+                    await SendJsonAsync(res, 200, "{\"cams\":[" + string.Join(",", list.Select(c => Registry.CamJson(c, false))) + "]}").ConfigureAwait(false);
+                }
+                else if (path == "/api/registry")
+                {
+                    if (method == "GET") await SendJsonAsync(res, 200, RegistryPublicJson()).ConfigureAwait(false);
+                    else if (method == "PUT") { if (!Mut(req, res)) return; await HandleRegistryPutAsync(req, res).ConfigureAwait(false); }
+                    else await SendJsonAsync(res, 405, Err("Gunakan GET atau PUT.")).ConfigureAwait(false);
+                }
+                else if (path == "/api/registry/scan")
+                {
+                    if (method == "GET")
+                    {
+                        var job = scanner.Get(req.QueryString["id"] ?? "");
+                        if (job == null) await SendJsonAsync(res, 404, Err("Pemindaian tidak ditemukan.")).ConfigureAwait(false);
+                        else await SendJsonAsync(res, 200, scanner.ToJson(job)).ConfigureAwait(false);
+                    }
+                    else if (method == "POST") { if (!Mut(req, res)) return; await HandleScanPostAsync(req, res).ConfigureAwait(false); }
+                    else await SendJsonAsync(res, 405, Err("Gunakan GET atau POST.")).ConfigureAwait(false);
+                }
+                else if (path == "/api/registry/export")
+                {
+                    if (method != "POST") { await SendJsonAsync(res, 405, Err("Gunakan POST.")).ConfigureAwait(false); return; }
+                    if (!Mut(req, res)) return;
+                    await HandleExportAsync(req, res).ConfigureAwait(false);
                 }
                 else if (path == "/api/info" && method == "GET")
                 {
@@ -199,6 +234,108 @@ namespace NvrBridge
         }
 
         static string Err(string m) { return "{\"error\":" + Json.Q(m) + "}"; }
+
+        /// <summary>Permintaan yang mengubah data wajib membawa header X-NvrBridge: 1 (mencegah pemanggilan dari halaman web lain).</summary>
+        bool Mut(HttpListenerRequest req, HttpListenerResponse res)
+        {
+            if (req.Headers["X-NvrBridge"] == "1") return true;
+            SendJsonAsync(res, 403, Err("Header X-NvrBridge: 1 diperlukan.")).GetAwaiter().GetResult();
+            return false;
+        }
+
+        // ---------- registrasi NVR ----------
+
+        string RegistryPublicJson()
+        {
+            if (cfg.Reg != null) return cfg.Reg.PublicJson();
+            var r = new Registry();
+            if (cfg.NvrConfigured) { r.NvrUrl = cfg.NvrBase.GetLeftPart(UriPartial.Authority); r.NvrUser = cfg.NvrUser; r.NvrPass = cfg.NvrPassword; r.Scheme = cfg.NvrAuthScheme; r.SelfSigned = cfg.NvrAllowSelfSigned; }
+            foreach (var c in cfg.Cameras) r.Cams.Add(new RegCam { Cam = c.Id, Name = c.Name });
+            return r.PublicJson();
+        }
+
+        async Task<Dictionary<string, object>> ReadJsonBodyAsync(HttpListenerRequest req, HttpListenerResponse res)
+        {
+            byte[] body = await ReadBodyAsync(req, 512 * 1024).ConfigureAwait(false);
+            if (body == null) { await SendJsonAsync(res, 413, Err("Data terlalu besar (maks 512 KB).")).ConfigureAwait(false); return null; }
+            try { return MiniJson.Obj(MiniJson.Parse(new UTF8Encoding(false, true).GetString(body))) ?? new Dictionary<string, object>(); }
+            catch (Exception e) when (e is MiniJson.JsonException || e is ArgumentException)
+            { await SendJsonAsync(res, 400, Err("JSON tidak valid: " + e.Message)).ConfigureAwait(false); return null; }
+        }
+
+        async Task HandleRegistryPutAsync(HttpListenerRequest req, HttpListenerResponse res)
+        {
+            var d = await ReadJsonBodyAsync(req, res).ConfigureAwait(false);
+            if (d == null) return;
+            Registry r;
+            try { r = Registry.FromJson(d, cfg.Reg); }
+            catch (ArgumentException e) { await SendJsonAsync(res, 400, Err(e.Message)).ConfigureAwait(false); return; }
+            lock (regLock) r.Save(cfg);
+            Log.Info("Registrasi kamera disimpan: " + r.Cams.Count + " baris.");
+            await SendJsonAsync(res, 200, "{\"ok\":true}").ConfigureAwait(false);
+            var ignored = Task.Run(async () => { await Task.Delay(700).ConfigureAwait(false); requestReload(); });   // muat ulang NvrBridge dengan data baru
+        }
+
+        async Task HandleScanPostAsync(HttpListenerRequest req, HttpListenerResponse res)
+        {
+            var d = await ReadJsonBodyAsync(req, res).ConfigureAwait(false);
+            if (d == null) return;
+            if (req.QueryString["cancel"] == "1") { scanner.Cancel(req.QueryString["id"] ?? ""); await SendJsonAsync(res, 200, "{\"ok\":true}").ConfigureAwait(false); return; }
+            Registry r;
+            try
+            {
+                r = Registry.FromJson(d, cfg.Reg);
+                if (r.NvrUrl.Length == 0 || r.NvrUser.Length == 0) throw new ArgumentException("Isi alamat NVR dan user.");
+                if (r.NvrPass.Length == 0 && cfg.NvrConfigured && r.NvrUser == cfg.NvrUser &&
+                    string.Equals(r.NvrUrl, cfg.NvrBase.GetLeftPart(UriPartial.Authority), StringComparison.OrdinalIgnoreCase)) r.NvrPass = cfg.NvrPassword;
+            }
+            catch (ArgumentException e) { await SendJsonAsync(res, 400, Err(e.Message)).ConfigureAwait(false); return; }
+            int max = MiniJson.Int(d, "max", 64);
+            if (max < 1 || max > 128) { await SendJsonAsync(res, 400, Err("Jumlah CAM yang diuji harus 1-128.")).ConfigureAwait(false); return; }
+            DateTime? probe = null;
+            string pt = MiniJson.Str(d, "probeTime").Trim();
+            if (pt.Length > 0)
+            {
+                DateTime t;
+                if (!DateTime.TryParse(pt, CI, DateTimeStyles.None, out t)) { await SendJsonAsync(res, 400, Err("Waktu uji tidak valid.")).ConfigureAwait(false); return; }
+                probe = t;
+            }
+            try
+            {
+                var job = scanner.Start(r, max, probe);
+                await SendJsonAsync(res, 200, "{\"id\":" + Json.Q(job.Id) + "}").ConfigureAwait(false);
+            }
+            catch (InvalidOperationException e) { await SendJsonAsync(res, 409, Err(e.Message)).ConfigureAwait(false); }
+        }
+
+        async Task HandleExportAsync(HttpListenerRequest req, HttpListenerResponse res)
+        {
+            var d = await ReadJsonBodyAsync(req, res).ConfigureAwait(false);
+            if (d == null) return;
+            if (cfg.Go2rtcYaml.Length == 0) { await SendJsonAsync(res, 409, Err("Go2rtcYaml belum diisi di nvrbridge.config, jadi go2rtc.yaml tidak boleh ditulis.")).ConfigureAwait(false); return; }
+            if (cfg.Reg == null) { await SendJsonAsync(res, 409, Err("Simpan daftar kamera dulu.")).ConfigureAwait(false); return; }
+            int count;
+            try { lock (regLock) count = cfg.Reg.ExportTo(cfg.Go2rtcYaml); }
+            catch (ArgumentException e) { await SendJsonAsync(res, 409, Err(e.Message)).ConfigureAwait(false); return; }
+            catch (IOException e) { await SendJsonAsync(res, 500, Err("Tidak bisa menulis go2rtc.yaml: " + e.Message)).ConfigureAwait(false); return; }
+            catch (UnauthorizedAccessException e) { await SendJsonAsync(res, 500, Err("Tidak bisa menulis go2rtc.yaml: " + e.Message)).ConfigureAwait(false); return; }
+            Log.Info("go2rtc.yaml diperbarui dengan " + count + " kamera.");
+            bool restarted = false;
+            if (MiniJson.Bool(d, "restart", false))
+            {
+                // go2rtc keluar; CctvViewer menjalankannya lagi otomatis. Tanpa CctvViewer, jalankan ulang go2rtc secara manual.
+                try
+                {
+                    var rq = (HttpWebRequest)WebRequest.Create(new Uri(cfg.Go2rtcApi, "api/exit?code=1"));
+                    rq.Method = "POST"; rq.ContentLength = 0; rq.Timeout = 3000; rq.Proxy = null;
+                    using (rq.GetResponse()) { }
+                    restarted = true;
+                }
+                catch (WebException) { restarted = true; }          // koneksi putus karena go2rtc langsung berhenti
+                catch (Exception e) { Log.Warn("Tidak bisa menghentikan go2rtc: " + e.Message); }
+            }
+            await SendJsonAsync(res, 200, "{\"ok\":true,\"count\":" + count + ",\"restarted\":" + (restarted ? "true" : "false") + "}").ConfigureAwait(false);
+        }
 
         bool Authorized(HttpListenerRequest req)
         {

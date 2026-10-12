@@ -28,6 +28,14 @@ namespace NvrBridge
         public DateTime? Latest;
     }
 
+    sealed class ProbeInfo
+    {
+        public int Http;
+        public string ContentType = "";
+        public string RecStatus = "";      // header X-RecData-Satus (jika ada)
+        public string Snippet = "";        // awal isi jika berupa teks
+    }
+
     sealed class DownloadResult
     {
         public List<string> Files = new List<string>();
@@ -315,6 +323,121 @@ namespace NvrBridge
             {
                 writer.Abort();
                 throw;
+            }
+        }
+
+        /// <summary>
+        /// Hanya menanyakan ke NVR apakah permintaan httpdl untuk CAM ini dijawab: membaca header jawaban (dan sedikit teks jika berupa teks)
+        /// lalu memutus koneksi. Tidak ada rekaman yang diunduh.
+        /// </summary>
+        public async Task<ProbeInfo> ProbeDownloadAsync(int cam, DateTime start, DateTime end, string kind, CancellationToken ct)
+        {
+            Interlocked.Increment(ref active);
+            try
+            {
+                for (int attempt = 0; ; attempt++)
+                {
+                    string u = await GetUidAsync(ct).ConfigureAwait(false);
+                    string pq = "/cgi-bin/httpdl.cgi?UID=" + u + "&STARTTIME=" + Stamp(start) + "&ENDTIME=" + Stamp(end) +
+                                "&KIND=" + kind + "&CAM=" + cam.ToString(CI) + "&PC=AS60";
+                    HttpResponseMessage resp;
+                    try
+                    {
+                        resp = await http.SendAsync(new HttpRequestMessage(HttpMethod.Get, Url(pq)), HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+                    }
+                    catch (HttpRequestException e)
+                    {
+                        throw new NvrException("Tidak bisa terhubung ke NVR: " + (e.InnerException != null ? e.InnerException.Message : e.Message));
+                    }
+                    using (resp)
+                    {
+                        if ((resp.StatusCode == HttpStatusCode.Unauthorized || resp.StatusCode == HttpStatusCode.Forbidden) && attempt == 0)
+                        { Invalidate(u); continue; }
+
+                        var info = new ProbeInfo { Http = (int)resp.StatusCode };
+                        var ctype = resp.Content.Headers.ContentType;
+                        info.ContentType = ctype != null ? (ctype.MediaType ?? "") : "";
+                        IEnumerable<string> vals;
+                        if (resp.Headers.TryGetValues("X-RecData-Satus", out vals) || resp.Headers.TryGetValues("X-RecData-Status", out vals))
+                            info.RecStatus = (vals.FirstOrDefault() ?? "").Trim();
+                        if (info.ContentType.StartsWith("text/", StringComparison.OrdinalIgnoreCase))
+                        {
+                            using (var body = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false))
+                            {
+                                var buf = new byte[300];
+                                int n = await body.ReadAsync(buf, 0, buf.Length, ct).ConfigureAwait(false);
+                                info.Snippet = System.Text.Encoding.UTF8.GetString(buf, 0, n).Replace('\r', ' ').Replace('\n', ' ').Trim();
+                            }
+                        }
+                        return info;           // using resp: koneksi diputus tanpa membaca isi video
+                    }
+                }
+            }
+            finally
+            {
+                Interlocked.Decrement(ref active);
+                lock (uidLock) { lastUse = DateTime.UtcNow; }
+            }
+        }
+
+        /// <summary>
+        /// Uji ringan satu nomor kamera: kirim permintaan httpdl.cgi lalu baca status dan header saja, tanpa mengunduh isi video.
+        /// Mengembalikan (state, pesan): rec = NVR mulai mengirim data, none = NVR menjawab "tidak ada rekaman", error = jawaban lain.
+        /// </summary>
+        public async Task<Tuple<string, string>> ProbeCamAsync(int cam, DateTime start, DateTime end, CancellationToken ct)
+        {
+            for (int attempt = 0; ; attempt++)
+            {
+                string u = await GetUidAsync(ct).ConfigureAwait(false);
+                string pq = "/cgi-bin/httpdl.cgi?UID=" + u + "&STARTTIME=" + Stamp(start) + "&ENDTIME=" + Stamp(end) +
+                            "&KIND=MP4VO&CAM=" + cam.ToString(CI) + "&PC=AS60";
+                Log.Debug("GET " + pq);
+                using (var cts = CancellationTokenSource.CreateLinkedTokenSource(ct))
+                {
+                    cts.CancelAfter(TimeSpan.FromSeconds(30));
+                    try
+                    {
+                        using (var resp = await http.SendAsync(new HttpRequestMessage(HttpMethod.Get, Url(pq)),
+                                                               HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false))
+                        {
+                            var ctype = resp.Content.Headers.ContentType;
+                            string media = ctype != null ? (ctype.MediaType ?? "") : "";
+                            IEnumerable<string> vals;
+                            string recStatus = null;
+                            if (resp.Headers.TryGetValues("X-RecData-Satus", out vals) || resp.Headers.TryGetValues("X-RecData-Status", out vals))
+                                recStatus = (vals.FirstOrDefault() ?? "").Trim();
+
+                            if (resp.StatusCode == HttpStatusCode.Unauthorized || resp.StatusCode == HttpStatusCode.Forbidden)
+                            {
+                                if (attempt == 0) { Invalidate(u); continue; }
+                                return Tuple.Create("error", "HTTP " + (int)resp.StatusCode + " (sesi/izin ditolak)");
+                            }
+                            if (!resp.IsSuccessStatusCode) return Tuple.Create("error", "HTTP " + (int)resp.StatusCode);
+                            if (recStatus == "1") return Tuple.Create("none", "Tidak ada rekaman pada rentang waktu uji.");
+                            if (recStatus == "3") return Tuple.Create("error", "NVR sibuk.");
+                            if (media.StartsWith("text/", StringComparison.OrdinalIgnoreCase))
+                            {
+                                using (var body = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false))
+                                {
+                                    var buf = new byte[300];
+                                    int n = await body.ReadAsync(buf, 0, buf.Length, cts.Token).ConfigureAwait(false);
+                                    string snip = System.Text.Encoding.UTF8.GetString(buf, 0, n).Replace('\r', ' ').Replace('\n', ' ').Trim();
+                                    return Tuple.Create("error", "NVR mengirim teks: " + snip);
+                                }
+                            }
+                            return Tuple.Create("rec", "HTTP " + (int)resp.StatusCode + " " + (media.Length > 0 ? media : "data") +
+                                                       (recStatus != null ? ", status " + recStatus : ""));
+                        }
+                    }
+                    catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                    {
+                        return Tuple.Create("error", "NVR tidak menjawab dalam 30 detik.");
+                    }
+                    catch (HttpRequestException e)
+                    {
+                        throw new NvrException("Tidak bisa terhubung ke NVR: " + (e.InnerException != null ? e.InnerException.Message : e.Message));
+                    }
+                }
             }
         }
 

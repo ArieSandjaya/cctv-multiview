@@ -241,6 +241,7 @@
 
   <div class="group">
     <a id="nvr" class="btn" target="_blank" rel="noopener" hidden title="Buka web NX510 untuk playback rekaman">Playback NVR</a>
+    <a id="setup" class="btn" target="_blank" rel="noopener" hidden data-title="Registrasi NVR dan daftar kamera" title="Daftarkan NVR dan atur kamera">Kamera NVR</a>
     <button id="mapbtn" hidden title="Peta denah">Peta</button>
     <button id="fs" title="Layar penuh (F)">Layar penuh</button>
     <button id="reload" class="wallonly" title="Muat ulang layar ini (F5)">Muat ulang</button>
@@ -961,18 +962,36 @@ function showNotice(html) {
 }
 let retryTimer = null;
 async function probeBridge() {
-  // Tombol Playback/PTZ/Peta hanya muncul jika NvrBridge benar-benar menjawab
+  // Tombol Playback/PTZ/Peta hanya muncul jika NvrBridge benar-benar menjawab.
+  // Jika menjawab, nama kamera dan nomor kamera NVR dari Registrasi NVR ikut dipakai (config.js tetap lebih diutamakan).
   const base = (cfg.bridgeUrl || cfg.nvrUrl || '');
   if (!base) return;
+  const root = base.replace(/[?#].*$/, '').replace(/\/?$/, '/');
   const ctl = new AbortController();
   const to = setTimeout(() => ctl.abort(), 2000);
-  try { const r = await fetch(base.replace(/\/?$/, '/') + 'api/info', {cache: 'no-store', signal: ctl.signal}); if (!r.ok) throw 0; }
+  try {
+    const r = await fetch(root + 'api/info', {cache: 'no-store', signal: ctl.signal});
+    if (!r.ok) throw 0;
+    $('setup').href = root + 'setup.html'; $('setup').hidden = false;
+    const c = await fetch(root + 'api/cams', {cache: 'no-store', signal: ctl.signal});
+    if (c.ok) {
+      const j = await c.json();
+      const names = Object.assign({}, cfg.names), nvrCam = Object.assign({}, cfg.nvrCam);
+      for (const k of j.cams || []) {
+        if (!/^cam\d+$/.test(k.id)) continue;
+        if (!(k.id in cfg.names)) names[k.id] = k.name;
+        if (!(k.id in cfg.nvrCam)) nvrCam[k.id] = k.cam;
+      }
+      cfg.names = names; cfg.nvrCam = nvrCam;
+    }
+  }
   catch { if (wall) { cfg.nvrUrl = ''; showNvrBtn(); } }
   finally { clearTimeout(to); }
 }
 async function start() {
   clearTimeout(retryTimer);
   notice.classList.remove('show');
+  await probeBridge();
   try {
     state.allCams = await loadCams();
   } catch (err) {
@@ -991,7 +1010,6 @@ async function start() {
     if (wall) retryTimer = setTimeout(start, 10000);
     return;
   }
-  await probeBridge();
   renderPage();
   applyRotate();
   initBridge();

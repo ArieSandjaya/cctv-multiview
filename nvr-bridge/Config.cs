@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 
 namespace NvrBridge
 {
@@ -25,6 +26,10 @@ namespace NvrBridge
     /// <summary>Konfigurasi dari file teks Kunci=Nilai (baris # adalah komentar).</summary>
     sealed class AppConfig
     {
+        public bool NvrConfigured = true;       // false = belum ada NVR (mode awal: isi lewat halaman Registrasi NVR)
+        public Registry Reg;                    // data\registry.json (jika ada)
+        public string Go2rtcYaml = "";          // go2rtc.yaml yang boleh ditulis oleh fitur Registrasi (kosong = fitur ekspor mati)
+        public Uri Go2rtcApi = new Uri("http://127.0.0.1:1984/");
         public Uri NvrBase;
         public string NvrUser = "";
         public string NvrPassword = "";
@@ -80,12 +85,13 @@ namespace NvrBridge
 
             string url = Get(kv, "NvrBaseUrl", "");
             Uri u;
-            if (!Uri.TryCreate(url, UriKind.Absolute, out u) || (u.Scheme != "http" && u.Scheme != "https"))
+            if (url.Length == 0) { c.NvrConfigured = false; u = new Uri("http://nvr-belum-diatur.invalid/"); }
+            else if (!Uri.TryCreate(url, UriKind.Absolute, out u) || (u.Scheme != "http" && u.Scheme != "https"))
                 throw new ConfigException("NvrBaseUrl harus berupa alamat http:// atau https:// (contoh: https://192.168.1.50)");
             c.NvrBase = u;
             c.NvrUser = Get(kv, "NvrUser", "");
             c.NvrPassword = Get(kv, "NvrPassword", "");
-            if (c.NvrUser.Length == 0) throw new ConfigException("NvrUser belum diisi.");
+            if (c.NvrConfigured && c.NvrUser.Length == 0) throw new ConfigException("NvrUser belum diisi.");
 
             c.NvrAuthScheme = Get(kv, "NvrAuthScheme", "Digest");
             if (!c.NvrAuthScheme.Equals("Digest", StringComparison.OrdinalIgnoreCase) &&
@@ -110,8 +116,6 @@ namespace NvrBridge
                 if (name.Length == 0) name = "Kamera " + id;
                 c.Cameras.Add(new Camera { Id = id, Name = name });
             }
-            if (c.Cameras.Count == 0)
-                throw new ConfigException("Cameras belum diisi. Contoh: Cameras=1=Lobby Utama;2=Parkir B1");
 
             c.ListenPrefix = Get(kv, "ListenPrefix", c.ListenPrefix);
             if (!c.ListenPrefix.EndsWith("/")) throw new ConfigException("ListenPrefix harus diakhiri tanda / (contoh: http://localhost:8090/)");
@@ -169,7 +173,36 @@ namespace NvrBridge
             c.ClipDir = Path.GetFullPath(Path.Combine(baseDir, Get(kv, "ClipDir", "clips")));
             c.WebDir = Path.GetFullPath(Path.Combine(baseDir, Get(kv, "WebDir", "web")));
             c.Verbose = Bool(kv, "Verbose", false);
+
+            string y = Get(kv, "Go2rtcYaml", "");
+            if (y.Length > 0) c.Go2rtcYaml = Path.GetFullPath(Path.Combine(baseDir, y));
+            Uri ga;
+            if (Uri.TryCreate(Get(kv, "Go2rtcApi", "http://127.0.0.1:1984"), UriKind.Absolute, out ga) && ga.Scheme == "http")
+                c.Go2rtcApi = new Uri(ga.GetLeftPart(UriPartial.Authority) + "/");
+
+            ApplyRegistry(c);
             return c;
+        }
+
+        /// <summary>Menimpa NVR dan daftar kamera dengan data registrasi (data\registry.json), dan menambah PTZ untuk kamera yang ditandai.</summary>
+        static void ApplyRegistry(AppConfig c)
+        {
+            var r = Registry.Load(c);
+            c.Reg = r;
+            if (r == null) return;
+            Uri nu;
+            if (r.NvrUrl.Length > 0 && r.NvrUser.Length > 0 && Uri.TryCreate(r.NvrUrl + "/", UriKind.Absolute, out nu))
+            {
+                c.NvrConfigured = true; c.NvrBase = nu; c.NvrUser = r.NvrUser; c.NvrPassword = r.NvrPass;
+                c.NvrAuthScheme = r.Scheme; c.NvrAllowSelfSigned = r.SelfSigned;
+            }
+            if (r.Cams.Count > 0)
+            {
+                c.Cameras = r.Cams.Where(x => x.Enabled).Select(x => new Camera { Id = x.Cam, Name = x.Name }).ToList();
+                foreach (var x in r.Cams.Where(k => k.Enabled && k.Ptz && k.Ip.Length > 0))
+                    c.PtzCameras[x.StreamId] = new PtzTarget { Host = x.Ip, Type = x.Brand == "ipro" ? "onvif" : "dahua" };
+                if (c.PtzUser.Length == 0 && r.CamUser.Length > 0) { c.PtzUser = r.CamUser; c.PtzPassword = r.CamPass; }
+            }
         }
 
         static string Get(Dictionary<string, string> kv, string key, string def)

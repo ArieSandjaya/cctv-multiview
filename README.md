@@ -16,6 +16,12 @@ Default: 3 monitor × 16 kamera (grid 4×4) = 48 kamera. Layar 1 = `cam01`-`cam1
 
 **Memakai**: gerakkan mouse ke atas layar untuk memunculkan header (Playback, Peta, Muat ulang, Keluar). Klik dua kali tile untuk memperbesar (stream utama + PTZ), `Esc` menutup. `Keluar` (atau `CctvViewer.exe --stop`) menutup semuanya.
 
+**Registrasi NVR dan daftar kamera**: tombol **Kamera NVR** di header membuka halaman registrasi (atau `http://127.0.0.1:8090/setup.html`).
+1. Isi alamat, user, dan password NVR, lalu **Pindai**. NVR tidak punya perintah daftar kamera, jadi NvrBridge mengirim `httpdl.cgi` untuk CAM 1 sampai 64 (jeda ±3 detik per CAM, sekitar 3,5 menit) dan hanya membaca jawaban NVR, tanpa mengunduh video. CAM yang menjawab normal masuk daftar; jawaban asli NVR untuk CAM lain ditampilkan untuk diagnosis. Kamera yang tidak terdeteksi bisa ditambah manual.
+2. Isi akun kamera, lalu per kamera: nama, IP, merek (Dahua atau i-PRO), PTZ. URL RTSP sub dan stream utama dibuat otomatis dari IP dan merek; isi kolom RTSP hanya untuk kamera yang berbeda.
+3. **Simpan dan terapkan ke go2rtc** menulis blok `cam01`, `cam02`, ... (sesuai nomor CAM) ke `go2rtc.yaml` dan memulai ulang go2rtc (CctvViewer menjalankannya lagi otomatis). Daftar ini juga dipakai untuk nama kamera, tombol Playback per kamera, dan PTZ.
+Data tersimpan di `NvrBridge\data\registry.json` (berisi password; jangan di-commit). Hasil pemindaian belum diuji pada NX510 asli: jawaban NVR untuk nomor yang tidak terdaftar tidak ada di dokumen CGI, jadi periksa daftar hasilnya.
+
 **Ketahanan**: go2rtc, NvrBridge, dan tiap layar dijaga; jika berhenti atau jendela ditutup, dibuka lagi otomatis (jeda bertahap). Jika monitor terlambat terdeteksi atau dicabut-dipasang, jendela dikembalikan ke monitornya. Halaman memuat ulang diri tiap 6 jam (`ReloadMinutes`). Log ada di folder `data\` (`cctvviewer.log`, `go2rtc.log`, `nvrbridge.log`; maks 5 MB + 1 cadangan).
 
 **Pengaturan** di `cctvviewer.config`: `Screens`, `CamsPerScreen`, `Monitors` (manual jika urutan monitor salah), `Browser`, `ReopenClosedScreens`, `ReloadMinutes`, dll., semuanya dijelaskan di berkasnya.

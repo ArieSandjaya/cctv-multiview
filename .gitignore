@@ -3,6 +3,5 @@ bin/
 obj/
 go2rtc.exe
 data/
-clips/
-.vs/
-*.user
+*.bak
+registry.json

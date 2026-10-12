@@ -24,57 +24,71 @@ namespace NvrBridge
                 }
             }
 
-            AppConfig cfg;
-            try { cfg = AppConfig.Load(cfgPath); }
-            catch (ConfigException e)
-            {
-                Console.Error.WriteLine("Konfigurasi bermasalah: " + e.Message);
-                return 2;
-            }
-            Log.Verbose = cfg.Verbose;
-
             // TLS 1.2 (nilai 3072) untuk HTTPS ke NVR pada .NET Framework.
             ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072;
             ServicePointManager.DefaultConnectionLimit = 32;
 
-            Directory.CreateDirectory(cfg.ClipDir);
-            foreach (var f in Directory.GetFiles(cfg.ClipDir, "*.mp4")) { try { File.Delete(f); } catch { } }
+            var quit = new ManualResetEventSlim(false);
+            Console.CancelKeyPress += (s, e) => { e.Cancel = true; quit.Set(); };
 
-            using (var nvr = new NvrClient(cfg))
+            // Muat ulang: halaman Registrasi NVR menyimpan data baru lalu meminta NvrBridge memuat konfigurasinya lagi tanpa keluar dari proses.
+            while (true)
             {
-                if (selfTest) return await SelfTestAsync(cfg, nvr).ConfigureAwait(false);
-
-                Directory.CreateDirectory(cfg.DataDir);
-                using (var jobs = new JobManager(cfg, nvr))
-                using (var ptz = new PtzClient(cfg))
-                using (var server = new WebServer(cfg, nvr, jobs, ptz))
+                AppConfig cfg;
+                try { cfg = AppConfig.Load(cfgPath); }
+                catch (ConfigException e)
                 {
-                    try { server.Start(); }
-                    catch (HttpListenerException e)
+                    Console.Error.WriteLine("Konfigurasi bermasalah: " + e.Message);
+                    return 2;
+                }
+                Log.Verbose = cfg.Verbose;
+
+                Directory.CreateDirectory(cfg.ClipDir);
+                foreach (var f in Directory.GetFiles(cfg.ClipDir, "*.mp4")) { try { File.Delete(f); } catch { } }
+
+                var reload = new ManualResetEventSlim(false);
+                using (var nvr = new NvrClient(cfg))
+                {
+                    if (selfTest)
                     {
-                        Console.Error.WriteLine("Tidak bisa membuka " + cfg.ListenPrefix + " : " + e.Message);
-                        Console.Error.WriteLine("Jika alamatnya http://+:PORT/ atau http://*:PORT/, jalankan sekali sebagai Administrator:");
-                        Console.Error.WriteLine("  netsh http add urlacl url=" + cfg.ListenPrefix + " user=Everyone");
-                        return 3;
+                        if (!cfg.NvrConfigured) { Console.Error.WriteLine("NVR belum diatur."); return 1; }
+                        return await SelfTestAsync(cfg, nvr).ConfigureAwait(false);
                     }
 
-                    Log.Info("NvrBridge berjalan di " + cfg.ListenPrefix);
-                    Log.Info("NVR: " + cfg.NvrBase + "  | kamera: " + cfg.Cameras.Count +
-                             "  | zona waktu NVR: " + (cfg.NvrTimeUtc ? "UTC" : "lokal (" + TimeZoneInfo.Local.DisplayName + ")"));
-                    if (ptz.Enabled) Log.Info("PTZ aktif untuk: " + string.Join(", ", ptz.CameraIds));
-                    if (cfg.AllowOrigin.Length > 0 && cfg.BridgeUser.Length > 0)
-                        Log.Warn("AllowOrigin diisi bersama BridgeUser: browser tidak akan meminta login lintas-origin, jadi halaman multiview tidak bisa memakai API ini. Kosongkan BridgeUser atau akses lewat jaringan tepercaya saja.");
-                    if (cfg.BridgeUser.Length == 0 && !cfg.ListenPrefix.Contains("localhost") && !cfg.ListenPrefix.Contains("127.0.0.1"))
-                        Log.Warn("Halaman dapat dibuka tanpa login. Isi BridgeUser/BridgePassword di nvrbridge.config.");
-                    Console.WriteLine("Tekan Ctrl+C untuk berhenti.");
+                    Directory.CreateDirectory(cfg.DataDir);
+                    using (var jobs = new JobManager(cfg, nvr))
+                    using (var ptz = new PtzClient(cfg))
+                    using (var scanner = new Scanner(cfg))
+                    using (var server = new WebServer(cfg, nvr, jobs, ptz, scanner, () => reload.Set()))
+                    {
+                        try { server.Start(); }
+                        catch (HttpListenerException e)
+                        {
+                            Console.Error.WriteLine("Tidak bisa membuka " + cfg.ListenPrefix + " : " + e.Message);
+                            Console.Error.WriteLine("Jika alamatnya http://+:PORT/ atau http://*:PORT/, jalankan sekali sebagai Administrator:");
+                            Console.Error.WriteLine("  netsh http add urlacl url=" + cfg.ListenPrefix + " user=Everyone");
+                            return 3;
+                        }
 
-                    var quit = new ManualResetEventSlim(false);
-                    Console.CancelKeyPress += (s, e) => { e.Cancel = true; quit.Set(); };
-                    await Task.Run(() => quit.Wait()).ConfigureAwait(false);
-                    Log.Info("Menghentikan...");
+                        Log.Info("NvrBridge berjalan di " + cfg.ListenPrefix);
+                        if (cfg.NvrConfigured)
+                            Log.Info("NVR: " + cfg.NvrBase + "  | kamera: " + cfg.Cameras.Count +
+                                     "  | zona waktu NVR: " + (cfg.NvrTimeUtc ? "UTC" : "lokal (" + TimeZoneInfo.Local.DisplayName + ")"));
+                        else
+                            Log.Info("NVR belum diatur. Buka " + cfg.ListenPrefix + "setup.html untuk registrasi NVR.");
+                        if (ptz.Enabled) Log.Info("PTZ aktif untuk: " + string.Join(", ", ptz.CameraIds));
+                        if (cfg.AllowOrigin.Length > 0 && cfg.BridgeUser.Length > 0)
+                            Log.Warn("AllowOrigin diisi bersama BridgeUser: browser tidak akan meminta login lintas-origin, jadi halaman multiview tidak bisa memakai API ini. Kosongkan BridgeUser atau akses lewat jaringan tepercaya saja.");
+                        if (cfg.BridgeUser.Length == 0 && !cfg.ListenPrefix.Contains("localhost") && !cfg.ListenPrefix.Contains("127.0.0.1"))
+                            Log.Warn("Halaman dapat dibuka tanpa login. Isi BridgeUser/BridgePassword di nvrbridge.config.");
+                        Console.WriteLine("Tekan Ctrl+C untuk berhenti.");
+
+                        await Task.Run(() => WaitHandle.WaitAny(new[] { quit.WaitHandle, reload.WaitHandle })).ConfigureAwait(false);
+                        Log.Info(quit.IsSet ? "Menghentikan..." : "Memuat ulang konfigurasi...");
+                    }
                 }
+                if (quit.IsSet) return 0;
             }
-            return 0;
         }
 
         static async Task<int> SelfTestAsync(AppConfig cfg, NvrClient nvr)

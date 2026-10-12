@@ -961,6 +961,20 @@ function showNotice(html) {
   notice.querySelector('.box').innerHTML = html;
   notice.classList.add('show');
 }
+// Pengaturan dari aplikasi CctvViewer (Panel > Pengaturan > Tampilan kamera): viewer.json di folder www, menimpa config.js
+async function loadViewerJson() {
+  try {
+    const r = await fetch('viewer.json', {cache: 'no-store'});
+    if (!r.ok) return;
+    const j = await r.json();
+    for (const k of ['title', 'mode', 'hdSuffix', 'layout', 'rotateSeconds', 'dewarpMax']) if (j[k] !== undefined && j[k] !== '') cfg[k] = j[k];
+    if (Array.isArray(j.order)) cfg.order = j.order;
+    if (Array.isArray(j.hide)) cfg.hide = j.hide;
+    if (j.names) cfg.names = Object.assign({}, cfg.names, j.names);
+    if (j.fisheye) cfg.fisheye = Object.assign({}, cfg.fisheye, j.fisheye);
+    document.title = cfg.title; $('title').textContent = cfg.title;
+  } catch {}
+}
 let retryTimer = null;
 async function probeBridge() {
   // Tombol Playback/PTZ/Peta hanya muncul jika NvrBridge benar-benar menjawab.
@@ -992,6 +1006,7 @@ async function probeBridge() {
 async function start() {
   clearTimeout(retryTimer);
   notice.classList.remove('show');
+  await loadViewerJson();
   await probeBridge();
   try {
     state.allCams = await loadCams();

@@ -19,6 +19,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\nvr-bridge\MiniJson.cs" Link="MiniJson.cs" />
+    <Compile Include="..\nvr-bridge\Json.cs" Link="Json.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Include="cctvviewer.config" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 

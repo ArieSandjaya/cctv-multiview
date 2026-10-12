@@ -8,6 +8,20 @@ namespace CctvViewer
     /// <summary>Mengubah nilai Kunci=Nilai di berkas konfigurasi tanpa menghilangkan komentar.</summary>
     static class ConfigWriter
     {
+        public static Dictionary<string, string> ReadAll(string path)
+        {
+            var d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (!File.Exists(path)) return d;
+            foreach (var raw in File.ReadAllLines(path, Encoding.UTF8))
+            {
+                string t = raw.Trim();
+                if (t.Length == 0 || t[0] == '#') continue;
+                int eq = t.IndexOf('=');
+                if (eq > 0) d[t.Substring(0, eq).Trim()] = t.Substring(eq + 1).Trim();
+            }
+            return d;
+        }
+
         public static void Set(string path, IDictionary<string, string> values)
         {
             var lines = new List<string>(File.Exists(path) ? File.ReadAllLines(path, Encoding.UTF8) : new string[0]);

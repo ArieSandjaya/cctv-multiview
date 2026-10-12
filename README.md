@@ -24,7 +24,11 @@ Data tersimpan di `NvrBridge\data\registry.json` (berisi password; jangan di-com
 
 **Ketahanan**: go2rtc dan NvrBridge dijaga dan dijalankan ulang otomatis (jeda bertahap). Jika proses WebView2 sebuah layar mati, layar dipulihkan; jika go2rtc belum siap, halaman mencoba lagi tiap 5 detik. Jika monitor terlambat terdeteksi atau dicabut-dipasang, jendela dibuka atau dikembalikan ke monitornya. Halaman memuat ulang diri tiap 6 jam (`ReloadMinutes`). Log ada di folder `data\` (`cctvviewer.log`, `go2rtc.log`, `nvrbridge.log`; maks 5 MB + 1 cadangan).
 
-**Pengaturan** di Panel atau `cctvviewer.config`: `Screens`, `CamsPerScreen`, `Monitors` (manual jika urutan monitor salah), `AllowCloseScreen`, `ReloadMinutes`, `WebViewArgs`, dll., semuanya dijelaskan di berkasnya.
+**Semua pengaturan lewat jendela aplikasi** (tidak perlu mengedit teks): Panel > **Pengaturan** punya tiga tab, dan **Registrasi NVR** untuk NVR/kamera.
+- *Layar dan aplikasi*: jumlah layar, kamera per layar, muat ulang, tunggu monitor, posisi monitor manual (tombol isi dari monitor terdeteksi), Alt+F4, jalan otomatis, NvrBridge hidup/mati, alamat go2rtc/NvrBridge, port kontrol, argumen WebView2. Disimpan ke `cctvviewer.config`; aplikasi menawarkan mulai ulang.
+- *NvrBridge*: judul, alamat dengar, origin multiview, login halaman, jenis klip, durasi/jumlah unduhan/retensi klip, zona waktu NVR, PTZ. Disimpan ke `NvrBridge\nvrbridge.config`; NvrBridge dimulai ulang otomatis. NVR, akun kamera, daftar kamera, RTSP, dan PTZ per kamera ada di Registrasi NVR.
+- *Tampilan kamera*: judul halaman, mode pemutaran, akhiran stream HD, layout, jeda ganti halaman, batas dewarp, dan tabel kamera (nama tampilan, tampil/sembunyi, urutan naik/turun, fisheye ceiling/wall, FOV, tile, cermin). Disimpan ke `www\viewer.json` (menimpa `config.js`); layar dimuat ulang setelah disimpan.
+Berkas konfigurasi tetap bisa diedit manual bila perlu, tetapi tidak lagi diwajibkan.
 
 **Kapasitas**: 48 sub stream berarti 48 decoder video di tiga proses browser. Gunakan decoder perangkat keras (GPU Intel/NVIDIA/AMD yang cukup baru) dan sub stream H.264 640x360 10-15 fps. Jika tersendat, turunkan resolusi/fps sub stream di kamera dulu. Pantau CPU/GPU di Task Manager saat uji pertama.
 

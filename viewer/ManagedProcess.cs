@@ -73,6 +73,13 @@ namespace CctvViewer
             }
         }
 
+        /// <summary>Menghentikan proses; Ensure() menjalankannya lagi pada putaran berikutnya.</summary>
+        public void Restart()
+        {
+            Stop();
+            failures = 0; nextTry = DateTime.MinValue;
+        }
+
         public void Stop()
         {
             try { if (Running) { proc.Kill(); proc.WaitForExit(3000); } } catch { }

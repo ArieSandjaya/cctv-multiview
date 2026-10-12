@@ -145,6 +145,9 @@ namespace CctvViewer
             }
         }
 
+        public bool BridgeManaged { get { return bridge != null; } }
+        public void RestartBridge() { if (bridge != null) { Log.Info("NvrBridge dimulai ulang (pengaturan berubah)."); bridge.Restart(); } }
+
         public string StatusText()
         {
             var sb = new StringBuilder();

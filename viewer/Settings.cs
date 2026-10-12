@@ -25,6 +25,7 @@ namespace CctvViewer
         public bool StartNvrBridge = true;
         public string NvrBridgeExe, NvrBridgeConfig;
         public int ControlPort = 1985;
+        public string WwwDir;
 
         public static Settings Load(string path, string baseDir)
         {
@@ -51,6 +52,7 @@ namespace CctvViewer
             s.StartNvrBridge = Bool(kv, "StartNvrBridge", true);
             s.Go2rtcExe = Rel(baseDir, Str(kv, "Go2rtcExe", "go2rtc.exe"));
             s.Go2rtcConfig = Rel(baseDir, Str(kv, "Go2rtcConfig", "go2rtc.yaml"));
+            s.WwwDir = Rel(baseDir, Str(kv, "WwwDir", "www"));
             s.NvrBridgeExe = Rel(baseDir, Str(kv, "NvrBridgeExe", @"NvrBridge\NvrBridge.exe"));
             s.NvrBridgeConfig = Rel(baseDir, Str(kv, "NvrBridgeConfig", @"NvrBridge\nvrbridge.config"));
 

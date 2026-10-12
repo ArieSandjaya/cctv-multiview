@@ -26,7 +26,7 @@ echo.
 echo Selesai. Salin seluruh folder dist\ ke PC video wall, mis. C:\CctvViewer, lalu edit:
 echo   go2rtc.yaml                     (daftar kamera)
 echo   NvrBridge\nvrbridge.config        (NVR dan PTZ, opsional)
-echo   www\config.js                   (nama kamera)
+echo   (semua pengaturan juga bisa lewat Panel ^> Pengaturan di aplikasi)
 echo   cctvviewer.config               (jumlah layar, dll.)
 exit /b 0
 :fail

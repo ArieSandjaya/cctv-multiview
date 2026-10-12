@@ -245,6 +245,7 @@
     <button id="mapbtn" hidden title="Peta denah">Peta</button>
     <button id="fs" title="Layar penuh (F)">Layar penuh</button>
     <button id="reload" class="wallonly" title="Muat ulang layar ini (F5)">Muat ulang</button>
+    <button id="panelbtn" class="wallonly" title="Buka panel kontrol CctvViewer (pengaturan, registrasi NVR)">Panel</button>
     <button id="quit" class="wallonly" title="Tutup aplikasi CctvViewer (semua layar)">Keluar</button>
   </div>
 
@@ -1019,6 +1020,10 @@ async function start() {
 if (wall) {
   $('title').textContent = cfg.title;
   $('reload').addEventListener('click', () => location.reload());
+  $('panelbtn').addEventListener('click', async () => {
+    if (!wall.ctl) return;
+    try { await fetch('http://' + location.hostname + ':' + wall.ctl + '/panel', {method: 'POST', headers: {'X-CctvViewer': '1'}}); } catch {}
+  });
   $('quit').addEventListener('click', async () => {
     if (!confirm('Tutup CctvViewer? Semua layar kamera akan berhenti.')) return;
     if (!wall.ctl) return alert('Aplikasi peluncur tidak ditemukan. Tutup dengan Alt+F4.');

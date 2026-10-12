@@ -11,12 +11,13 @@ namespace CctvViewer
         readonly HttpListener l = new HttpListener();
         readonly string allowOrigin;
         readonly Action quit;
+        readonly Action panel;
         readonly Func<string> status;
         volatile bool disposed;
 
-        public ControlServer(int port, string allowOrigin, Action quit, Func<string> status)
+        public ControlServer(int port, string allowOrigin, Action quit, Action panel, Func<string> status)
         {
-            this.allowOrigin = allowOrigin; this.quit = quit; this.status = status;
+            this.allowOrigin = allowOrigin; this.quit = quit; this.panel = panel; this.status = status;
             l.Prefixes.Add("http://127.0.0.1:" + port + "/");
         }
 
@@ -62,6 +63,13 @@ namespace CctvViewer
                 Send(res, 200, "ok");
                 Log.Info("Permintaan keluar diterima dari " + (origin ?? "lokal") + ".");
                 quit();
+                return;
+            }
+            if (path == "/panel" && req.HttpMethod == "POST")
+            {
+                if (req.Headers["X-CctvViewer"] != "1") { Send(res, 403, "Header X-CctvViewer: 1 diperlukan."); return; }
+                Send(res, 200, "ok");
+                panel();
                 return;
             }
             Send(res, 404, "Tidak ditemukan.");

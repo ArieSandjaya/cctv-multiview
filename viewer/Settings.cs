@@ -16,9 +16,9 @@ namespace CctvViewer
         public int CamsPerScreen = 16;
         public List<Area> ManualMonitors;          // null = auto
         public int MonitorWaitSeconds = 60;
-        public string Browser = "auto";
-        public string BrowserArgs = "";
-        public bool ReopenClosedScreens = true;
+        public string WebViewArgs = "";
+        public bool AllowCloseScreen = false;
+        public Uri BridgeUrl = new Uri("http://127.0.0.1:8090/");
         public int ReloadMinutes = 360;
         public string Go2rtcExe, Go2rtcConfig;
         public Uri Go2rtcApi = new Uri("http://127.0.0.1:1984/");
@@ -46,9 +46,8 @@ namespace CctvViewer
             s.MonitorWaitSeconds = Int(kv, "MonitorWaitSeconds", 60, 0, 600);
             s.ReloadMinutes = Int(kv, "ReloadMinutes", 360, 0, 10080);
             s.ControlPort = Int(kv, "ControlPort", 1985, 0, 65535);
-            s.Browser = Str(kv, "Browser", "auto");
-            s.BrowserArgs = Str(kv, "BrowserArgs", "");
-            s.ReopenClosedScreens = Bool(kv, "ReopenClosedScreens", true);
+            s.WebViewArgs = Str(kv, "WebViewArgs", "");
+            s.AllowCloseScreen = Bool(kv, "AllowCloseScreen", false);
             s.StartNvrBridge = Bool(kv, "StartNvrBridge", true);
             s.Go2rtcExe = Rel(baseDir, Str(kv, "Go2rtcExe", "go2rtc.exe"));
             s.Go2rtcConfig = Rel(baseDir, Str(kv, "Go2rtcConfig", "go2rtc.yaml"));
@@ -59,6 +58,11 @@ namespace CctvViewer
             if (!Uri.TryCreate(Str(kv, "Go2rtcApi", "http://127.0.0.1:1984"), UriKind.Absolute, out api) || api.Scheme != "http")
                 throw new ConfigException("Go2rtcApi harus berupa alamat http, contoh http://127.0.0.1:1984");
             s.Go2rtcApi = new Uri(api.GetLeftPart(UriPartial.Authority) + "/");
+
+            Uri br;
+            if (!Uri.TryCreate(Str(kv, "BridgeUrl", "http://127.0.0.1:8090"), UriKind.Absolute, out br) || br.Scheme != "http")
+                throw new ConfigException("BridgeUrl harus berupa alamat http, contoh http://127.0.0.1:8090");
+            s.BridgeUrl = new Uri(br.GetLeftPart(UriPartial.Authority) + "/");
 
             string mon = Str(kv, "Monitors", "auto");
             if (!mon.Equals("auto", StringComparison.OrdinalIgnoreCase))

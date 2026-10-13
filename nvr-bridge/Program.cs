@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
@@ -47,19 +48,19 @@ namespace NvrBridge
                 foreach (var f in Directory.GetFiles(cfg.ClipDir, "*.mp4")) { try { File.Delete(f); } catch { } }
 
                 var reload = new ManualResetEventSlim(false);
-                using (var nvr = new NvrClient(cfg))
+                using (var pool = new NvrPool(cfg))
                 {
                     if (selfTest)
                     {
                         if (!cfg.NvrConfigured) { Console.Error.WriteLine("NVR belum diatur."); return 1; }
-                        return await SelfTestAsync(cfg, nvr).ConfigureAwait(false);
+                        return await SelfTestAsync(cfg, pool).ConfigureAwait(false);
                     }
 
                     Directory.CreateDirectory(cfg.DataDir);
-                    using (var jobs = new JobManager(cfg, nvr))
+                    using (var jobs = new JobManager(cfg, pool))
                     using (var ptz = new PtzClient(cfg))
                     using (var scanner = new Scanner(cfg))
-                    using (var server = new WebServer(cfg, nvr, jobs, ptz, scanner, () => reload.Set()))
+                    using (var server = new WebServer(cfg, pool, jobs, ptz, scanner, () => reload.Set()))
                     {
                         try { server.Start(); }
                         catch (HttpListenerException e)
@@ -72,7 +73,7 @@ namespace NvrBridge
 
                         Log.Info("NvrBridge berjalan di " + cfg.ListenPrefix);
                         if (cfg.NvrConfigured)
-                            Log.Info("NVR: " + cfg.NvrBase + "  | kamera: " + cfg.Cameras.Count +
+                            Log.Info("NVR: " + string.Join(", ", cfg.Nvrs.Select(n => n.Name + " " + n.Base)) + "  | kamera: " + cfg.Cameras.Count +
                                      "  | zona waktu NVR: " + (cfg.NvrTimeUtc ? "UTC" : "lokal (" + TimeZoneInfo.Local.DisplayName + ")"));
                         else
                             Log.Info("NVR belum diatur. Buka " + cfg.ListenPrefix + "setup.html untuk registrasi NVR.");
@@ -91,31 +92,32 @@ namespace NvrBridge
             }
         }
 
-        static async Task<int> SelfTestAsync(AppConfig cfg, NvrClient nvr)
+        static async Task<int> SelfTestAsync(AppConfig cfg, NvrPool pool)
         {
-            Console.WriteLine("Uji koneksi ke " + cfg.NvrBase + " ...");
-            try
+            int rc = 0;
+            foreach (var n in cfg.Nvrs)
             {
-                await nvr.GetUidAsync(CancellationToken.None).ConfigureAwait(false);
-                Console.WriteLine("Login: OK");
+                var nvr = pool.Get(n.Id);
+                Console.WriteLine("Uji koneksi ke " + n.Name + " (" + n.Base + ") ...");
                 try
                 {
-                    var r = await nvr.GetRecordedRangeAsync(CancellationToken.None).ConfigureAwait(false);
-                    Console.WriteLine("Rentang rekaman (waktu NVR): " +
-                        (r.Oldest.HasValue ? r.Oldest.Value.ToString("yyyy-MM-dd HH:mm") : "?") + " s/d " +
-                        (r.Latest.HasValue ? r.Latest.Value.ToString("yyyy-MM-dd HH:mm") : "?"));
+                    await nvr.GetUidAsync(CancellationToken.None).ConfigureAwait(false);
+                    Console.WriteLine("Login: OK");
+                    try
+                    {
+                        var r = await nvr.GetRecordedRangeAsync(CancellationToken.None).ConfigureAwait(false);
+                        Console.WriteLine("Rentang rekaman (waktu NVR): " +
+                            (r.Oldest.HasValue ? r.Oldest.Value.ToString("yyyy-MM-dd HH:mm") : "?") + " s/d " +
+                            (r.Latest.HasValue ? r.Latest.Value.ToString("yyyy-MM-dd HH:mm") : "?"));
+                    }
+                    catch (NvrException e)
+                    {
+                        Console.WriteLine("Rentang rekaman: tidak tersedia (" + e.Message + "). Ini opsional; unduh klip tetap bisa dicoba.");
+                    }
                 }
-                catch (NvrException e)
-                {
-                    Console.WriteLine("Rentang rekaman: tidak tersedia (" + e.Message + "). Ini opsional; unduh klip tetap bisa dicoba.");
-                }
-                return 0;
+                catch (NvrException e) { Console.Error.WriteLine("GAGAL: " + e.Message); rc = 1; }
             }
-            catch (NvrException e)
-            {
-                Console.Error.WriteLine("GAGAL: " + e.Message);
-                return 1;
-            }
+            return rc;
         }
     }
 }

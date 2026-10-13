@@ -19,8 +19,18 @@ namespace NvrBridge
 
     sealed class Camera
     {
-        public int Id;
+        public int Id;          // nomor tampil global (nomor playback)
         public string Name;
+        public string NvrId = "";   // "" = tidak terhubung ke NVR
+        public int Channel;         // nomor kamera di NVR tersebut
+    }
+
+    sealed class NvrConn
+    {
+        public string Id = "nvr1", Name = "NVR";
+        public Uri Base;
+        public string User = "", Pass = "", Scheme = "Digest";
+        public bool SelfSigned = true;
     }
 
     /// <summary>Konfigurasi dari file teks Kunci=Nilai (baris # adalah komentar).</summary>
@@ -30,6 +40,7 @@ namespace NvrBridge
         public Registry Reg;                    // data\registry.json (jika ada)
         public string Go2rtcYaml = "";          // go2rtc.yaml yang boleh ditulis oleh fitur Registrasi (kosong = fitur ekspor mati)
         public Uri Go2rtcApi = new Uri("http://127.0.0.1:1984/");
+        public List<NvrConn> Nvrs = new List<NvrConn>();   // semua NVR terdaftar (yang pertama juga tercermin di NvrBase/NvrUser/... di bawah)
         public Uri NvrBase;
         public string NvrUser = "";
         public string NvrPassword = "";
@@ -61,6 +72,14 @@ namespace NvrBridge
         public string ClipDir;
         public string WebDir;
         public bool Verbose;
+
+        /// <summary>Salinan konfigurasi yang menunjuk ke satu NVR (untuk NvrClient).</summary>
+        public AppConfig ForNvr(NvrConn n)
+        {
+            var c = (AppConfig)MemberwiseClone();
+            c.NvrBase = n.Base; c.NvrUser = n.User; c.NvrPassword = n.Pass; c.NvrAuthScheme = n.Scheme; c.NvrAllowSelfSigned = n.SelfSigned; c.NvrConfigured = true;
+            return c;
+        }
 
         public static AppConfig Load(string path)
         {
@@ -114,8 +133,10 @@ namespace NvrBridge
                 if (!int.TryParse(idText, NumberStyles.None, CultureInfo.InvariantCulture, out id) || id < 1 || id > 9999)
                     throw new ConfigException("Cameras: nomor kamera tidak valid: '" + idText + "'");
                 if (name.Length == 0) name = "Kamera " + id;
-                c.Cameras.Add(new Camera { Id = id, Name = name });
+                c.Cameras.Add(new Camera { Id = id, Name = name, NvrId = "nvr1", Channel = id });
             }
+            if (c.NvrConfigured)
+                c.Nvrs.Add(new NvrConn { Id = "nvr1", Name = "NVR", Base = c.NvrBase, User = c.NvrUser, Pass = c.NvrPassword, Scheme = c.NvrAuthScheme, SelfSigned = c.NvrAllowSelfSigned });
 
             c.ListenPrefix = Get(kv, "ListenPrefix", c.ListenPrefix);
             if (!c.ListenPrefix.EndsWith("/")) throw new ConfigException("ListenPrefix harus diakhiri tanda / (contoh: http://localhost:8090/)");
@@ -190,18 +211,32 @@ namespace NvrBridge
             var r = Registry.Load(c);
             c.Reg = r;
             if (r == null) return;
-            Uri nu;
-            if (r.NvrUrl.Length > 0 && r.NvrUser.Length > 0 && Uri.TryCreate(r.NvrUrl + "/", UriKind.Absolute, out nu))
+            var nvrs = new List<NvrConn>();
+            foreach (var n in r.Nvrs)
             {
-                c.NvrConfigured = true; c.NvrBase = nu; c.NvrUser = r.NvrUser; c.NvrPassword = r.NvrPass;
-                c.NvrAuthScheme = r.Scheme; c.NvrAllowSelfSigned = r.SelfSigned;
+                Uri nu;
+                if (n.Url.Length > 0 && n.User.Length > 0 && Uri.TryCreate(n.Url + "/", UriKind.Absolute, out nu))
+                    nvrs.Add(new NvrConn { Id = n.Id, Name = n.Name, Base = nu, User = n.User, Pass = n.Pass, Scheme = n.Scheme, SelfSigned = n.SelfSigned });
+            }
+            if (nvrs.Count > 0 || r.Cams.Count > 0)
+            {
+                c.Nvrs = nvrs;
+                c.NvrConfigured = nvrs.Count > 0;
+                if (nvrs.Count > 0)
+                {
+                    var f = nvrs[0];
+                    c.NvrBase = f.Base; c.NvrUser = f.User; c.NvrPassword = f.Pass; c.NvrAuthScheme = f.Scheme; c.NvrAllowSelfSigned = f.SelfSigned;
+                }
             }
             if (r.Cams.Count > 0)
             {
-                c.Cameras = r.Cams.Where(x => x.Enabled).Select(x => new Camera { Id = x.Cam, Name = x.Name }).ToList();
+                c.Cameras = r.Cams.Where(x => x.Enabled && nvrs.Any(n => n.Id == x.Nvr))
+                    .Select(x => new Camera { Id = x.Num, Name = x.Name, NvrId = x.Nvr, Channel = x.Cam }).ToList();
                 foreach (var x in r.Cams.Where(k => k.Enabled && k.Ptz && k.Ip.Length > 0))
                     c.PtzCameras[x.StreamId] = new PtzTarget { Host = x.Ip, Type = x.Brand == "ipro" ? "onvif" : "dahua" };
-                if (c.PtzUser.Length == 0 && r.CamUser.Length > 0) { c.PtzUser = r.CamUser; c.PtzPassword = r.CamPass; }
+                // Satu akun PTZ untuk semua kamera: dari pengaturan PtzUser, atau akun kamera NVR pertama yang mengisinya.
+                var withCred = r.Nvrs.FirstOrDefault(n => n.CamUser.Length > 0);
+                if (c.PtzUser.Length == 0 && withCred != null) { c.PtzUser = withCred.CamUser; c.PtzPassword = withCred.CamPass; }
             }
         }
 

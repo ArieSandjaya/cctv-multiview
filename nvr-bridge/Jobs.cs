@@ -20,27 +20,51 @@ namespace NvrBridge
         public DateTime Created = DateTime.UtcNow;
     }
 
+    /// <summary>Satu NvrClient per NVR terdaftar; kamera dicari lewat nomor tampil.</summary>
+    sealed class NvrPool : IDisposable
+    {
+        readonly AppConfig cfg;
+        readonly Dictionary<string, NvrClient> clients = new Dictionary<string, NvrClient>();
+
+        public NvrPool(AppConfig cfg)
+        {
+            this.cfg = cfg;
+            foreach (var n in cfg.Nvrs) clients[n.Id] = new NvrClient(cfg.ForNvr(n));
+        }
+
+        public bool Any { get { return clients.Count > 0; } }
+        public NvrClient Get(string id) { NvrClient c; return id != null && clients.TryGetValue(id, out c) ? c : null; }
+        public Camera CamByNum(int num) { return cfg.Cameras.FirstOrDefault(c => c.Id == num); }
+        public NvrClient ForCam(int num) { var c = CamByNum(num); return c == null ? null : Get(c.NvrId); }
+        public string FirstId { get { return cfg.Nvrs.Count > 0 ? cfg.Nvrs[0].Id : ""; } }
+        public string NameOf(string id) { var n = cfg.Nvrs.FirstOrDefault(x => x.Id == id); return n != null ? n.Name : ""; }
+
+        public void Dispose() { foreach (var c in clients.Values) c.Dispose(); }
+    }
+
     /// <summary>Antrean unduhan klip; jumlah unduhan bersamaan dibatasi agar NVR tidak kewalahan.</summary>
     sealed class JobManager : IDisposable
     {
         readonly AppConfig cfg;
-        readonly NvrClient nvr;
+        readonly NvrPool pool;
         readonly SemaphoreSlim gate;
         readonly Dictionary<string, ClipJob> jobs = new Dictionary<string, ClipJob>();
         readonly object jobsLock = new object();
         readonly Timer cleaner;
 
-        public JobManager(AppConfig cfg, NvrClient nvr)
+        public JobManager(AppConfig cfg, NvrPool pool)
         {
             this.cfg = cfg;
-            this.nvr = nvr;
+            this.pool = pool;
             gate = new SemaphoreSlim(cfg.MaxConcurrentDownloads, cfg.MaxConcurrentDownloads);
             cleaner = new Timer(_ => Cleanup(), null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
         }
 
         public ClipJob Start(int cam, DateTime startUtc, int minutes)
         {
-            if (!cfg.Cameras.Any(c => c.Id == cam)) throw new ArgumentException("Kamera tidak dikenal.");
+            var camera = pool.CamByNum(cam);
+            if (camera == null) throw new ArgumentException("Kamera tidak dikenal.");
+            if (pool.Get(camera.NvrId) == null) throw new ArgumentException("Kamera ini tidak terhubung ke NVR.");
             if (minutes < 1 || minutes > cfg.MaxClipMinutes)
                 throw new ArgumentException("Durasi harus 1-" + cfg.MaxClipMinutes + " menit.");
             if (startUtc > DateTime.UtcNow.AddMinutes(5)) throw new ArgumentException("Waktu mulai berada di masa depan.");
@@ -83,7 +107,8 @@ namespace NvrBridge
                     Log.Info("Unduh klip kamera " + job.Cam + ", " + s.ToString("yyyy-MM-dd HH:mm") + " (" +
                              (cfg.NvrTimeUtc ? "UTC" : "lokal") + "), " + job.Minutes + " menit");
 
-                    var result = await nvr.DownloadAsync(job.Cam, s, e, cfg.ClipKind, cfg.ClipDir, job.Id,
+                    var camera = pool.CamByNum(job.Cam);
+                    var result = await pool.Get(camera.NvrId).DownloadAsync(camera.Channel, s, e, cfg.ClipKind, cfg.ClipDir, job.Id,
                         n => Interlocked.Add(ref job.Bytes, n), cts.Token).ConfigureAwait(false);
 
                     job.Files = result.Files.Select(Path.GetFileName).ToList();

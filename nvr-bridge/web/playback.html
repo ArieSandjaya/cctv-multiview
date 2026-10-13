@@ -184,7 +184,7 @@
     document.title = i.title; $('title').textContent = i.title;
     var camSel = $('cam');
     i.cameras.forEach(function (c) {
-      var o = document.createElement('option'); o.value = c.id; o.textContent = c.name; camSel.appendChild(o);
+      var o = document.createElement('option'); o.value = c.id; o.textContent = (c.group ? c.group + ' · ' : '') + c.name; camSel.appendChild(o);
     });
     var want = new URLSearchParams(location.search).get('cam');
     if (want && i.cameras.some(function (c) { return String(c.id) === want; })) camSel.value = want;
@@ -198,9 +198,15 @@
     setInputs(new Date(Date.now() - 10 * 60000));
   }).catch(function (e) { setStatus(e.message, 'err'); });
 
-  api('/api/range').then(function (r) {
-    if (r.oldest && r.latest) $('range').textContent = 'Rekaman tersedia: ' + r.oldest + ' – ' + r.latest + ' (jam NVR)';
-  }).catch(function () { /* opsional */ });
+  function loadRange() {
+    $('range').textContent = '';
+    api('/api/range?cam=' + encodeURIComponent($('cam').value)).then(function (r) {
+      if (r.oldest && r.latest) $('range').textContent = 'Rekaman tersedia: ' + r.oldest + ' – ' + r.latest + ' (jam NVR)';
+    }).catch(function () { /* opsional */ });
+  }
+  $('cam').addEventListener('change', loadRange);
+  // dipanggil setelah daftar kamera terisi
+  var waitCams = setInterval(function () { if ($('cam').options.length) { clearInterval(waitCams); loadRange(); } }, 150);
 })();
 </script>
 </body>

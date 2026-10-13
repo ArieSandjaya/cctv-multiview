@@ -43,7 +43,7 @@ namespace NvrBridge
 
         public ScanJob Get(string id) { lock (gate) { ScanJob j; return jobs.TryGetValue(id, out j) ? j : null; } }
 
-        public ScanJob Start(Registry nvrSettings, int maxCam, DateTime? probeLocal)
+        public ScanJob Start(RegNvr nvrSettings, int maxCam, DateTime? probeLocal)
         {
             lock (gate)
             {
@@ -52,7 +52,7 @@ namespace NvrBridge
                 jobs[job.Id] = job;
                 var tc = new AppConfig
                 {
-                    NvrBase = new Uri(nvrSettings.NvrUrl + "/"), NvrUser = nvrSettings.NvrUser, NvrPassword = nvrSettings.NvrPass,
+                    NvrBase = new Uri(nvrSettings.Url + "/"), NvrUser = nvrSettings.User, NvrPassword = nvrSettings.Pass,
                     NvrAuthScheme = nvrSettings.Scheme, NvrAllowSelfSigned = nvrSettings.SelfSigned,
                 };
                 Task.Run(() => Run(job, tc, maxCam, probeLocal));

@@ -7,9 +7,21 @@ using System.Text.RegularExpressions;
 
 namespace NvrBridge
 {
+    /// <summary>Satu NVR terdaftar. Kamera di bawahnya memakai akun kamera (CamUser/CamPass) milik NVR ini untuk URL RTSP otomatis.</summary>
+    sealed class RegNvr
+    {
+        public string Id = "nvr1";
+        public string Name = "";
+        public string Url = "", User = "", Pass = "", Scheme = "Digest";
+        public bool SelfSigned = true;
+        public string CamUser = "", CamPass = "";
+    }
+
     sealed class RegCam
     {
-        public int Cam;                    // nomor kamera di NVR
+        public int Num;                    // nomor tampil global (unik): menjadi nama stream camNN dan nomor playback
+        public string Nvr = "";            // id NVR ("" = tidak terhubung ke NVR, tanpa playback)
+        public int Cam;                    // nomor kamera (channel) di NVR tersebut
         public string Name = "";
         public string Ip = "";             // host[:port] kamera
         public string Brand = "dahua";     // dahua | ipro | custom
@@ -29,21 +41,22 @@ namespace NvrBridge
         public bool FeMirror;
         public string FeCx = "", FeCy = "", FeR = "";    // pecahan frame 0-1; kosong = otomatis (tengah)
 
-        public string StreamId { get { return "cam" + Cam.ToString("00"); } }
+        public string StreamId { get { return "cam" + Num.ToString("00"); } }
     }
 
-    /// <summary>Daftar kamera hasil registrasi NVR: koneksi NVR, kredensial kamera, dan baris kamera. Disimpan di data\registry.json.</summary>
+    /// <summary>Daftar NVR dan kamera hasil registrasi. Disimpan di data\registry.json.</summary>
     sealed class Registry
     {
-        public string NvrUrl = "", NvrUser = "", NvrPass = "", Scheme = "Digest";
-        public bool SelfSigned = true;
-        public string CamUser = "", CamPass = "";
+        public List<RegNvr> Nvrs = new List<RegNvr>();
         public List<RegCam> Cams = new List<RegCam>();
 
         static readonly Regex HostRx = new Regex(@"^[A-Za-z0-9.\-]{1,100}(:\d{1,5})?$", RegexOptions.Compiled);
         static readonly Regex RtspRx = new Regex(@"^rtsp://[^\s""'\\]{3,400}$", RegexOptions.Compiled);
+        static readonly Regex IdRx = new Regex(@"^[a-z0-9_-]{1,20}$", RegexOptions.Compiled);
 
         public static string PathFor(AppConfig cfg) { return Path.Combine(cfg.DataDir, "registry.json"); }
+
+        public RegNvr NvrOf(RegCam c) { return Nvrs.FirstOrDefault(n => n.Id == c.Nvr); }
 
         public static Registry Load(AppConfig cfg)
         {
@@ -53,46 +66,81 @@ namespace NvrBridge
             catch (Exception e) { Log.Warn("registry.json tidak bisa dibaca: " + e.Message); return null; }
         }
 
-        /// <summary>Membangun dari JSON. Password kosong = pertahankan dari "keep" (jika ada).</summary>
+        /// <summary>Registry dari nvrbridge.config lama (NvrBaseUrl/Cameras), dipakai sebagai nilai awal jika registry.json belum ada.</summary>
+        public static Registry FromConfig(AppConfig cfg)
+        {
+            var r = new Registry();
+            foreach (var n in cfg.Nvrs)
+                r.Nvrs.Add(new RegNvr { Id = n.Id, Name = n.Name, Url = n.Base.GetLeftPart(UriPartial.Authority), User = n.User, Pass = n.Pass, Scheme = n.Scheme, SelfSigned = n.SelfSigned });
+            foreach (var c in cfg.Cameras) r.Cams.Add(new RegCam { Num = c.Id, Nvr = c.NvrId, Cam = c.Channel, Name = c.Name });
+            return r;
+        }
+
+        /// <summary>Membangun dari JSON. Password kosong = pertahankan dari "keep" (NVR dengan id dan user yang sama).
+        /// Bentuk lama ({"nvr":{...},"camCreds":{...}}) dibaca sebagai satu NVR "nvr1".</summary>
         public static Registry FromJson(Dictionary<string, object> d, Registry keep)
         {
             if (d == null) throw new ArgumentException("Data registrasi kosong.");
             var r = new Registry();
-            var nvr = MiniJson.Obj(d.ContainsKey("nvr") ? d["nvr"] : null) ?? new Dictionary<string, object>();
-            r.NvrUrl = MiniJson.Str(nvr, "url").Trim();
-            r.NvrUser = MiniJson.Str(nvr, "user").Trim();
-            r.NvrPass = MiniJson.Str(nvr, "pass");
-            r.Scheme = MiniJson.Str(nvr, "scheme", "Digest");
-            r.SelfSigned = MiniJson.Bool(nvr, "selfSigned", true);
-            var cc = MiniJson.Obj(d.ContainsKey("camCreds") ? d["camCreds"] : null) ?? new Dictionary<string, object>();
-            r.CamUser = MiniJson.Str(cc, "user").Trim();
-            r.CamPass = MiniJson.Str(cc, "pass");
-            if (keep != null)
+            var nl = MiniJson.List(d, "nvrs");
+            if (nl == null && d.ContainsKey("nvr"))
             {
-                if (r.NvrPass.Length == 0 && r.NvrUser == keep.NvrUser) r.NvrPass = keep.NvrPass;
-                if (r.CamPass.Length == 0 && r.CamUser == keep.CamUser) r.CamPass = keep.CamPass;
+                var nvr = MiniJson.Obj(d["nvr"]) ?? new Dictionary<string, object>();
+                var cc = MiniJson.Obj(d.ContainsKey("camCreds") ? d["camCreds"] : null) ?? new Dictionary<string, object>();
+                var one = new Dictionary<string, object>(nvr);
+                one["id"] = "nvr1"; one["camUser"] = MiniJson.Str(cc, "user"); one["camPass"] = MiniJson.Str(cc, "pass");
+                if (MiniJson.Str(nvr, "url").Trim().Length > 0 || MiniJson.Str(nvr, "user").Trim().Length > 0) nl = new List<object> { one };
             }
-            if (r.NvrUrl.Length > 0)
+            if (nl == null) nl = new List<object>();
+            if (nl.Count > 16) throw new ArgumentException("Terlalu banyak NVR (maks 16).");
+            var ids = new HashSet<string>();
+            foreach (var o in nl)
             {
-                Uri u;
-                if (!Uri.TryCreate(r.NvrUrl, UriKind.Absolute, out u) || (u.Scheme != "http" && u.Scheme != "https") || u.AbsolutePath != "/" || u.UserInfo.Length > 0)
-                    throw new ArgumentException("Alamat NVR harus seperti https://192.168.1.50 (tanpa path).");
-                r.NvrUrl = u.GetLeftPart(UriPartial.Authority);
+                var n = MiniJson.Obj(o); if (n == null) continue;
+                var rn = new RegNvr
+                {
+                    Id = MiniJson.Str(n, "id").Trim().ToLowerInvariant(), Name = Clean(MiniJson.Str(n, "name"), 40),
+                    Url = MiniJson.Str(n, "url").Trim(), User = MiniJson.Str(n, "user").Trim(), Pass = MiniJson.Str(n, "pass"),
+                    Scheme = MiniJson.Str(n, "scheme", "Digest"), SelfSigned = MiniJson.Bool(n, "selfSigned", true),
+                    CamUser = MiniJson.Str(n, "camUser").Trim(), CamPass = MiniJson.Str(n, "camPass"),
+                };
+                if (rn.Id.Length == 0) { int k = 1; while (ids.Contains("nvr" + k)) k++; rn.Id = "nvr" + k; }
+                if (!IdRx.IsMatch(rn.Id)) throw new ArgumentException("Id NVR tidak valid: '" + rn.Id + "'.");
+                if (!ids.Add(rn.Id)) throw new ArgumentException("Id NVR ganda: " + rn.Id + ".");
+                if (rn.Name.Length == 0) rn.Name = "NVR " + rn.Id.Replace("nvr", "");
+                var old = keep != null ? keep.Nvrs.FirstOrDefault(x => x.Id == rn.Id) : null;
+                if (old != null)
+                {
+                    if (rn.Pass.Length == 0 && rn.User == old.User) rn.Pass = old.Pass;
+                    if (rn.CamPass.Length == 0 && rn.CamUser == old.CamUser) rn.CamPass = old.CamPass;
+                }
+                if (rn.Url.Length > 0)
+                {
+                    Uri u;
+                    if (!Uri.TryCreate(rn.Url, UriKind.Absolute, out u) || (u.Scheme != "http" && u.Scheme != "https") || u.AbsolutePath != "/" || u.UserInfo.Length > 0)
+                        throw new ArgumentException("Alamat NVR '" + rn.Name + "' harus seperti https://192.168.1.50 (tanpa path).");
+                    rn.Url = u.GetLeftPart(UriPartial.Authority);
+                }
+                if (!rn.Scheme.Equals("Digest", StringComparison.OrdinalIgnoreCase) && !rn.Scheme.Equals("Basic", StringComparison.OrdinalIgnoreCase))
+                    throw new ArgumentException("Skema login NVR '" + rn.Name + "' harus Digest atau Basic.");
+                rn.Scheme = char.ToUpperInvariant(rn.Scheme[0]) + rn.Scheme.Substring(1).ToLowerInvariant();
+                r.Nvrs.Add(rn);
             }
-            if (!r.Scheme.Equals("Digest", StringComparison.OrdinalIgnoreCase) && !r.Scheme.Equals("Basic", StringComparison.OrdinalIgnoreCase))
-                throw new ArgumentException("Skema login harus Digest atau Basic.");
-            r.Scheme = char.ToUpperInvariant(r.Scheme[0]) + r.Scheme.Substring(1).ToLowerInvariant();
 
             var list = MiniJson.List(d, "cams") ?? new List<object>();
             if (list.Count > 256) throw new ArgumentException("Terlalu banyak kamera (maks 256).");
-            var seen = new HashSet<int>();
+            var nums = new HashSet<int>();
+            var pairs = new HashSet<string>();
             foreach (var o in list)
             {
                 var c = MiniJson.Obj(o);
                 if (c == null) continue;
+                int cam = MiniJson.Int(c, "cam", 0);
                 var rc = new RegCam
                 {
-                    Cam = MiniJson.Int(c, "cam", 0),
+                    Cam = cam,
+                    Num = MiniJson.Int(c, "num", cam),
+                    Nvr = c.ContainsKey("nvr") ? MiniJson.Str(c, "nvr").Trim().ToLowerInvariant() : (r.Nvrs.Count > 0 ? r.Nvrs[0].Id : ""),
                     Name = Clean(MiniJson.Str(c, "name"), 60),
                     Ip = MiniJson.Str(c, "ip").Trim(),
                     Brand = MiniJson.Str(c, "brand", "dahua").ToLowerInvariant(),
@@ -103,21 +151,24 @@ namespace NvrBridge
                     Probe = MiniJson.Str(c, "probe", "manual"),
                     Note = Clean(MiniJson.Str(c, "note"), 200),
                 };
-                if (rc.Cam < 1 || rc.Cam > 999) throw new ArgumentException("Nomor kamera harus 1-999.");
-                if (!seen.Add(rc.Cam)) throw new ArgumentException("Nomor kamera ganda: " + rc.Cam + ".");
-                if (rc.Brand != "dahua" && rc.Brand != "ipro" && rc.Brand != "custom") throw new ArgumentException("Merek kamera " + rc.Cam + " tidak dikenal.");
+                if (rc.Num < 1 || rc.Num > 999) throw new ArgumentException("Nomor tampil kamera harus 1-999 (kamera '" + rc.Name + "').");
+                if (!nums.Add(rc.Num)) throw new ArgumentException("Nomor tampil ganda: " + rc.Num + ". Setiap kamera butuh nomor tampil (No.) yang unik.");
+                if (rc.Nvr.Length > 0 && !r.Nvrs.Any(x => x.Id == rc.Nvr)) throw new ArgumentException("Kamera " + rc.Num + " merujuk NVR yang tidak ada: '" + rc.Nvr + "'.");
+                if (rc.Cam < 0 || rc.Cam > 999) throw new ArgumentException("Nomor CAM di NVR harus 0-999 (kamera " + rc.Num + ").");
+                if (rc.Nvr.Length > 0 && !pairs.Add(rc.Nvr + "|" + rc.Cam)) throw new ArgumentException("Nomor CAM " + rc.Cam + " dipakai dua kali pada NVR yang sama.");
+                if (rc.Brand != "dahua" && rc.Brand != "ipro" && rc.Brand != "custom") throw new ArgumentException("Merek kamera " + rc.Num + " tidak dikenal.");
                 if (rc.Probe != "rec" && rc.Probe != "none" && rc.Probe != "error" && rc.Probe != "manual") rc.Probe = "manual";
-                if (rc.Name.Length == 0) rc.Name = "Kamera " + rc.Cam;
-                if (rc.Ip.Length > 0 && !HostRx.IsMatch(rc.Ip)) throw new ArgumentException("Alamat kamera " + rc.Cam + " tidak valid (contoh 192.168.1.101).");
-                if (rc.Rtsp.Length > 0 && !RtspRx.IsMatch(rc.Rtsp)) throw new ArgumentException("URL RTSP kamera " + rc.Cam + " harus diawali rtsp:// tanpa spasi.");
-                if (rc.RtspHd.Length > 0 && !RtspRx.IsMatch(rc.RtspHd)) throw new ArgumentException("URL RTSP utama kamera " + rc.Cam + " harus diawali rtsp:// tanpa spasi.");
-                if (rc.Ptz && rc.Ip.Length == 0) throw new ArgumentException("Kamera " + rc.Cam + ": PTZ butuh alamat IP.");
+                if (rc.Name.Length == 0) rc.Name = "Kamera " + rc.Num;
+                if (rc.Ip.Length > 0 && !HostRx.IsMatch(rc.Ip)) throw new ArgumentException("Alamat kamera " + rc.Num + " tidak valid (contoh 192.168.1.101).");
+                if (rc.Rtsp.Length > 0 && !RtspRx.IsMatch(rc.Rtsp)) throw new ArgumentException("URL RTSP kamera " + rc.Num + " harus diawali rtsp:// tanpa spasi.");
+                if (rc.RtspHd.Length > 0 && !RtspRx.IsMatch(rc.RtspHd)) throw new ArgumentException("URL RTSP utama kamera " + rc.Num + " harus diawali rtsp:// tanpa spasi.");
+                if (rc.Ptz && rc.Ip.Length == 0) throw new ArgumentException("Kamera " + rc.Num + ": PTZ butuh alamat IP.");
                 object feo;
                 if (c.TryGetValue("fe", out feo)) ParseFe(rc, feo);
                 else if (keep != null)
                 {
-                    // Klien yang tidak mengirim "fe" (halaman setup.html) tidak boleh menghapus pengaturan fisheye yang sudah ada.
-                    var old = keep.Cams.Find(x => x.Cam == rc.Cam);
+                    // Klien yang tidak mengirim "fe" tidak boleh menghapus pengaturan fisheye yang sudah ada.
+                    var old = keep.Cams.Find(x => x.Num == rc.Num);
                     if (old != null)
                     {
                         rc.Fisheye = old.Fisheye; rc.FeMount = old.FeMount; rc.FeFov = old.FeFov; rc.FeTile = old.FeTile; rc.FeMode = old.FeMode;
@@ -179,10 +230,10 @@ namespace NvrBridge
         }
 
         // ---------- URL RTSP ----------
-        string Cred()
+        static string Cred(RegNvr n)
         {
-            if (CamUser.Length == 0) return "";
-            return Uri.EscapeDataString(CamUser) + (CamPass.Length > 0 ? ":" + Uri.EscapeDataString(CamPass) : "") + "@";
+            if (n == null || n.CamUser.Length == 0) return "";
+            return Uri.EscapeDataString(n.CamUser) + (n.CamPass.Length > 0 ? ":" + Uri.EscapeDataString(n.CamPass) : "") + "@";
         }
 
         public string RtspSub(RegCam c)
@@ -191,8 +242,8 @@ namespace NvrBridge
             if (c.Ip.Length == 0 || c.Brand == "custom") return "";
             string host = c.Ip.Contains(":") ? c.Ip : c.Ip + ":554";
             return c.Brand == "ipro"
-                ? "rtsp://" + Cred() + host + "/MediaInput/h264/stream_2"
-                : "rtsp://" + Cred() + host + "/cam/realmonitor?channel=1&subtype=1";
+                ? "rtsp://" + Cred(NvrOf(c)) + host + "/MediaInput/h264/stream_2"
+                : "rtsp://" + Cred(NvrOf(c)) + host + "/cam/realmonitor?channel=1&subtype=1";
         }
 
         public string RtspMain(RegCam c)
@@ -201,56 +252,61 @@ namespace NvrBridge
             if (c.Rtsp.Length > 0 || c.Ip.Length == 0 || c.Brand == "custom") return "";
             string host = c.Ip.Contains(":") ? c.Ip : c.Ip + ":554";
             return c.Brand == "ipro"
-                ? "rtsp://" + Cred() + host + "/MediaInput/h264/stream_1"
-                : "rtsp://" + Cred() + host + "/cam/realmonitor?channel=1&subtype=0";
+                ? "rtsp://" + Cred(NvrOf(c)) + host + "/MediaInput/h264/stream_1"
+                : "rtsp://" + Cred(NvrOf(c)) + host + "/cam/realmonitor?channel=1&subtype=0";
         }
 
         // ---------- simpan ----------
+        string NvrsJson(bool secrets)
+        {
+            return "[" + string.Join(",", Nvrs.Select(n =>
+            {
+                var sb = new StringBuilder();
+                sb.Append("{\"id\":").Append(Json.Q(n.Id)).Append(",\"name\":").Append(Json.Q(n.Name)).Append(",\"url\":").Append(Json.Q(n.Url))
+                  .Append(",\"user\":").Append(Json.Q(n.User)).Append(",\"scheme\":").Append(Json.Q(n.Scheme))
+                  .Append(",\"selfSigned\":").Append(n.SelfSigned ? "true" : "false").Append(",\"camUser\":").Append(Json.Q(n.CamUser));
+                if (secrets) sb.Append(",\"pass\":").Append(Json.Q(n.Pass)).Append(",\"camPass\":").Append(Json.Q(n.CamPass));
+                else sb.Append(",\"hasPass\":").Append(n.Pass.Length > 0 ? "true" : "false").Append(",\"hasCamPass\":").Append(n.CamPass.Length > 0 ? "true" : "false");
+                return sb.Append("}").ToString();
+            })) + "]";
+        }
+
         public void Save(AppConfig cfg)
         {
             Directory.CreateDirectory(cfg.DataDir);
-            var sb = new StringBuilder();
-            sb.Append("{\"nvr\":{\"url\":").Append(Json.Q(NvrUrl)).Append(",\"user\":").Append(Json.Q(NvrUser))
-              .Append(",\"pass\":").Append(Json.Q(NvrPass)).Append(",\"scheme\":").Append(Json.Q(Scheme))
-              .Append(",\"selfSigned\":").Append(SelfSigned ? "true" : "false").Append("},");
-            sb.Append("\"camCreds\":{\"user\":").Append(Json.Q(CamUser)).Append(",\"pass\":").Append(Json.Q(CamPass)).Append("},\"cams\":[");
-            sb.Append(string.Join(",", Cams.Select(c => CamJson(c, true))));
-            sb.Append("]}");
+            string json = "{\"nvrs\":" + NvrsJson(true) + ",\"cams\":[" + string.Join(",", Cams.Select(c => CamJson(c, true))) + "]}";
             string p = PathFor(cfg), tmp = p + ".tmp";
-            File.WriteAllText(tmp, sb.ToString(), new UTF8Encoding(false));
+            File.WriteAllText(tmp, json, new UTF8Encoding(false));
             if (File.Exists(p)) File.Delete(p);
             File.Move(tmp, p);
         }
 
+        /// <summary>full=true: bentuk lengkap untuk editor ("cam" = nomor di NVR, "num" = nomor tampil).
+        /// full=false: untuk halaman multiview ("cam" = nomor tampil, dipakai sebagai nomor playback).</summary>
         public static string CamJson(RegCam c, bool full)
         {
             var sb = new StringBuilder();
-            sb.Append("{\"cam\":").Append(c.Cam).Append(",\"id\":").Append(Json.Q(c.StreamId)).Append(",\"name\":").Append(Json.Q(c.Name));
+            sb.Append("{\"cam\":").Append(full ? c.Cam : c.Num).Append(",\"id\":").Append(Json.Q(c.StreamId)).Append(",\"name\":").Append(Json.Q(c.Name));
             sb.Append(",\"enabled\":").Append(c.Enabled ? "true" : "false").Append(",\"ptz\":").Append(c.Ptz ? "true" : "false");
             sb.Append(",\"fe\":").Append(FeJson(c));
             if (full)
             {
-                sb.Append(",\"ip\":").Append(Json.Q(c.Ip)).Append(",\"brand\":").Append(Json.Q(c.Brand))
+                sb.Append(",\"num\":").Append(c.Num).Append(",\"nvr\":").Append(Json.Q(c.Nvr))
+                  .Append(",\"ip\":").Append(Json.Q(c.Ip)).Append(",\"brand\":").Append(Json.Q(c.Brand))
                   .Append(",\"rtsp\":").Append(Json.Q(c.Rtsp)).Append(",\"rtspHd\":").Append(Json.Q(c.RtspHd))
                   .Append(",\"probe\":").Append(Json.Q(c.Probe)).Append(",\"note\":").Append(Json.Q(c.Note));
             }
             return sb.Append("}").ToString();
         }
 
-        /// <summary>JSON untuk halaman setup: tanpa password (hanya penanda sudah terisi).</summary>
+        /// <summary>JSON untuk editor: tanpa password (hanya penanda sudah terisi).</summary>
         public string PublicJson()
         {
-            var sb = new StringBuilder();
-            sb.Append("{\"nvr\":{\"url\":").Append(Json.Q(NvrUrl)).Append(",\"user\":").Append(Json.Q(NvrUser))
-              .Append(",\"hasPass\":").Append(NvrPass.Length > 0 ? "true" : "false").Append(",\"scheme\":").Append(Json.Q(Scheme))
-              .Append(",\"selfSigned\":").Append(SelfSigned ? "true" : "false").Append("},");
-            sb.Append("\"camCreds\":{\"user\":").Append(Json.Q(CamUser)).Append(",\"hasPass\":").Append(CamPass.Length > 0 ? "true" : "false").Append("},\"cams\":[");
-            sb.Append(string.Join(",", Cams.Select(c =>
+            return "{\"nvrs\":" + NvrsJson(false) + ",\"cams\":[" + string.Join(",", Cams.Select(c =>
             {
                 string j = CamJson(c, true);
                 return j.Substring(0, j.Length - 1) + ",\"effRtsp\":" + Json.Q(MaskCred(RtspSub(c))) + ",\"effRtspHd\":" + Json.Q(MaskCred(RtspMain(c))) + "}";
-            })));
-            return sb.Append("]}").ToString();
+            })) + "]}";
         }
 
         static string MaskCred(string url) { return Regex.Replace(url ?? "", @"^(rtsp://)[^@/]*@", "$1***@"); }

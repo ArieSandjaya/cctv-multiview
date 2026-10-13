@@ -21,7 +21,7 @@ namespace NvrBridge
         const int MaxMapsJson = 256 * 1024, MaxMapImage = 5 * 1024 * 1024;
 
         readonly AppConfig cfg;
-        readonly NvrClient nvr;
+        readonly NvrPool pool;
         readonly JobManager jobs;
         readonly PtzClient ptz;
         readonly Scanner scanner;
@@ -32,16 +32,15 @@ namespace NvrBridge
         readonly CancellationTokenSource stop = new CancellationTokenSource();
         readonly byte[] authExpected;
 
-        DateTime rangeAt = DateTime.MinValue;
-        string rangeJson;
+        readonly Dictionary<string, Tuple<DateTime, string>> rangeCache = new Dictionary<string, Tuple<DateTime, string>>();
         readonly object rangeLock = new object();
 
-        public WebServer(AppConfig cfg, NvrClient nvr, JobManager jobs, PtzClient ptz, Scanner scanner, Action requestReload)
+        public WebServer(AppConfig cfg, NvrPool pool, JobManager jobs, PtzClient ptz, Scanner scanner, Action requestReload)
         {
             this.scanner = scanner;
             this.requestReload = requestReload;
             this.cfg = cfg;
-            this.nvr = nvr;
+            this.pool = pool;
             this.jobs = jobs;
             this.ptz = ptz;
             if (cfg.BridgeUser.Length > 0)
@@ -156,13 +155,14 @@ namespace NvrBridge
                 }
                 else if (path == "/api/info" && method == "GET")
                 {
-                    var cams = string.Join(",", cfg.Cameras.Select(c => "{\"id\":" + c.Id.ToString(CI) + ",\"name\":" + Json.Q(c.Name) + "}"));
+                    bool multi = cfg.Nvrs.Count > 1;
+                    var cams = string.Join(",", cfg.Cameras.Select(c => "{\"id\":" + c.Id.ToString(CI) + ",\"name\":" + Json.Q(c.Name) + ",\"group\":" + Json.Q(multi ? pool.NameOf(c.NvrId) : "") + "}"));
                     await SendJsonAsync(res, 200, "{\"title\":" + Json.Q(cfg.Title) + ",\"cameras\":[" + cams + "],\"maxMinutes\":" +
                         cfg.MaxClipMinutes.ToString(CI) + ",\"timeMode\":" + Json.Q(cfg.NvrTimeUtc ? "Utc" : "Local") + "}").ConfigureAwait(false);
                 }
                 else if (path == "/api/range" && method == "GET")
                 {
-                    await HandleRangeAsync(res).ConfigureAwait(false);
+                    await HandleRangeAsync(req, res).ConfigureAwait(false);
                 }
                 else if (path == "/api/clip")
                 {
@@ -247,11 +247,7 @@ namespace NvrBridge
 
         string RegistryPublicJson()
         {
-            if (cfg.Reg != null) return cfg.Reg.PublicJson();
-            var r = new Registry();
-            if (cfg.NvrConfigured) { r.NvrUrl = cfg.NvrBase.GetLeftPart(UriPartial.Authority); r.NvrUser = cfg.NvrUser; r.NvrPass = cfg.NvrPassword; r.Scheme = cfg.NvrAuthScheme; r.SelfSigned = cfg.NvrAllowSelfSigned; }
-            foreach (var c in cfg.Cameras) r.Cams.Add(new RegCam { Cam = c.Id, Name = c.Name });
-            return r.PublicJson();
+            return (cfg.Reg ?? Registry.FromConfig(cfg)).PublicJson();
         }
 
         async Task<Dictionary<string, object>> ReadJsonBodyAsync(HttpListenerRequest req, HttpListenerResponse res)
@@ -268,7 +264,7 @@ namespace NvrBridge
             var d = await ReadJsonBodyAsync(req, res).ConfigureAwait(false);
             if (d == null) return;
             Registry r;
-            try { r = Registry.FromJson(d, cfg.Reg); }
+            try { r = Registry.FromJson(d, cfg.Reg ?? Registry.FromConfig(cfg)); }
             catch (ArgumentException e) { await SendJsonAsync(res, 400, Err(e.Message)).ConfigureAwait(false); return; }
             lock (regLock) r.Save(cfg);
             Log.Info("Registrasi kamera disimpan: " + r.Cams.Count + " baris.");
@@ -281,13 +277,15 @@ namespace NvrBridge
             var d = await ReadJsonBodyAsync(req, res).ConfigureAwait(false);
             if (d == null) return;
             if (req.QueryString["cancel"] == "1") { scanner.Cancel(req.QueryString["id"] ?? ""); await SendJsonAsync(res, 200, "{\"ok\":true}").ConfigureAwait(false); return; }
-            Registry r;
+            RegNvr target;
             try
             {
-                r = Registry.FromJson(d, cfg.Reg);
-                if (r.NvrUrl.Length == 0 || r.NvrUser.Length == 0) throw new ArgumentException("Isi alamat NVR dan user.");
-                if (r.NvrPass.Length == 0 && cfg.NvrConfigured && r.NvrUser == cfg.NvrUser &&
-                    string.Equals(r.NvrUrl, cfg.NvrBase.GetLeftPart(UriPartial.Authority), StringComparison.OrdinalIgnoreCase)) r.NvrPass = cfg.NvrPassword;
+                var r = Registry.FromJson(d, cfg.Reg ?? Registry.FromConfig(cfg));
+                string scanId = MiniJson.Str(d, "scanNvr").Trim().ToLowerInvariant();
+                target = r.Nvrs.FirstOrDefault(n => n.Id == scanId) ?? (r.Nvrs.Count == 1 ? r.Nvrs[0] : null);
+                if (target == null) throw new ArgumentException("Pilih NVR yang akan dipindai.");
+                if (target.Url.Length == 0 || target.User.Length == 0) throw new ArgumentException("Isi alamat NVR dan user.");
+                if (target.Pass.Length == 0) throw new ArgumentException("Isi password NVR.");
             }
             catch (ArgumentException e) { await SendJsonAsync(res, 400, Err(e.Message)).ConfigureAwait(false); return; }
             int max = MiniJson.Int(d, "max", 64);
@@ -302,7 +300,7 @@ namespace NvrBridge
             }
             try
             {
-                var job = scanner.Start(r, max, probe);
+                var job = scanner.Start(target, max, probe);
                 await SendJsonAsync(res, 200, "{\"id\":" + Json.Q(job.Id) + "}").ConfigureAwait(false);
             }
             catch (InvalidOperationException e) { await SendJsonAsync(res, 409, Err(e.Message)).ConfigureAwait(false); }
@@ -357,17 +355,28 @@ namespace NvrBridge
 
         // ---------- API ----------
 
-        async Task HandleRangeAsync(HttpListenerResponse res)
+        async Task HandleRangeAsync(HttpListenerRequest req, HttpListenerResponse res)
         {
+            // ?cam=<nomor tampil> memilih NVR milik kamera itu; tanpa cam dipakai NVR pertama.
+            string nvrId = pool.FirstId;
+            string camQ = req.QueryString["cam"];
+            int camNum;
+            if (camQ != null)
+            {
+                if (!int.TryParse(camQ, NumberStyles.None, CI, out camNum) || pool.CamByNum(camNum) == null) { await SendJsonAsync(res, 400, Err("Kamera tidak dikenal.")).ConfigureAwait(false); return; }
+                nvrId = pool.CamByNum(camNum).NvrId;
+            }
+            var client = pool.Get(nvrId);
+            if (client == null) { await SendJsonAsync(res, 404, Err("NVR belum diatur.")).ConfigureAwait(false); return; }
             string cached = null;
-            lock (rangeLock) { if (rangeJson != null && DateTime.UtcNow - rangeAt < TimeSpan.FromSeconds(30)) cached = rangeJson; }
+            lock (rangeLock) { Tuple<DateTime, string> t; if (rangeCache.TryGetValue(nvrId, out t) && DateTime.UtcNow - t.Item1 < TimeSpan.FromSeconds(30)) cached = t.Item2; }
             if (cached != null) { await SendJsonAsync(res, 200, cached).ConfigureAwait(false); return; }
             try
             {
-                var r = await nvr.GetRecordedRangeAsync(stop.Token).ConfigureAwait(false);
+                var r = await client.GetRecordedRangeAsync(stop.Token).ConfigureAwait(false);
                 string json = "{\"oldest\":" + Json.Q(r.Oldest.HasValue ? r.Oldest.Value.ToString("yyyy-MM-dd HH:mm", CI) : null) +
                               ",\"latest\":" + Json.Q(r.Latest.HasValue ? r.Latest.Value.ToString("yyyy-MM-dd HH:mm", CI) : null) + "}";
-                lock (rangeLock) { rangeJson = json; rangeAt = DateTime.UtcNow; }
+                lock (rangeLock) { rangeCache[nvrId] = Tuple.Create(DateTime.UtcNow, json); }
                 await SendJsonAsync(res, 200, json).ConfigureAwait(false);
             }
             catch (NvrException e) { await SendJsonAsync(res, 502, Err(e.Message)).ConfigureAwait(false); }

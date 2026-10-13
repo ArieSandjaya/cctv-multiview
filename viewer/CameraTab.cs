@@ -15,7 +15,9 @@ namespace CctvViewer
     sealed class CamRow
     {
         public bool Enabled { get; set; }
-        public int Cam { get; set; }
+        public int Num { get; set; }          // nomor tampil (nama stream camNN, nomor playback)
+        public string Nvr { get; set; }       // id NVR ("" = tanpa NVR)
+        public int Cam { get; set; }          // nomor CAM di NVR
         public string Probe { get; set; }
         public string Name { get; set; }
         public string Ip { get; set; }
@@ -36,7 +38,7 @@ namespace CctvViewer
 
         public CamRow()
         {
-            Enabled = true; Probe = "manual"; Name = ""; Ip = ""; Brand = "dahua"; Rtsp = ""; RtspHd = ""; Note = "";
+            Enabled = true; Nvr = ""; Probe = "manual"; Name = ""; Ip = ""; Brand = "dahua"; Rtsp = ""; RtspHd = ""; Note = "";
             FeMount = "ceiling"; FeFov = 180; FeTile = "view"; FeMode = "view"; FeCx = ""; FeCy = ""; FeR = "";
         }
 
@@ -44,7 +46,7 @@ namespace CctvViewer
         {
             var r = new CamRow
             {
-                Enabled = MiniJson.Bool(c, "enabled", true), Cam = MiniJson.Int(c, "cam", 0), Probe = MiniJson.Str(c, "probe", "manual"),
+                Enabled = MiniJson.Bool(c, "enabled", true), Cam = MiniJson.Int(c, "cam", 0), Num = MiniJson.Int(c, "num", MiniJson.Int(c, "cam", 0)), Nvr = MiniJson.Str(c, "nvr"), Probe = MiniJson.Str(c, "probe", "manual"),
                 Name = MiniJson.Str(c, "name"), Ip = MiniJson.Str(c, "ip"), Brand = MiniJson.Str(c, "brand", "dahua"),
                 Rtsp = MiniJson.Str(c, "rtsp"), RtspHd = MiniJson.Str(c, "rtspHd"), Ptz = MiniJson.Bool(c, "ptz", false), Note = MiniJson.Str(c, "note"),
             };
@@ -54,12 +56,12 @@ namespace CctvViewer
                 r.Fisheye = true;
                 r.FeMount = MiniJson.Str(fe, "mount", "ceiling"); r.FeFov = MiniJson.Int(fe, "fov", 180);
                 r.FeTile = MiniJson.Str(fe, "tile", "view"); r.FeMode = MiniJson.Str(fe, "mode", "view"); r.FeMirror = MiniJson.Bool(fe, "mirror", false);
-                r.FeCx = Num(fe, "cx"); r.FeCy = Num(fe, "cy"); r.FeR = Num(fe, "r");
+                r.FeCx = FeNum(fe, "cx"); r.FeCy = FeNum(fe, "cy"); r.FeR = FeNum(fe, "r");
             }
             return r;
         }
 
-        static string Num(Dictionary<string, object> d, string k)
+        static string FeNum(Dictionary<string, object> d, string k)
         {
             object v; return d.TryGetValue(k, out v) && v is double ? ((double)v).ToString("0.####", CultureInfo.InvariantCulture) : "";
         }
@@ -76,7 +78,7 @@ namespace CctvViewer
         public string ToJson()
         {
             var sb = new StringBuilder();
-            sb.Append("{\"cam\":").Append(Cam).Append(",\"name\":").Append(Json.Q(Name ?? "")).Append(",\"ip\":").Append(Json.Q((Ip ?? "").Trim()))
+            sb.Append("{\"cam\":").Append(Cam).Append(",\"num\":").Append(Num).Append(",\"nvr\":").Append(Json.Q(Nvr ?? "")).Append(",\"name\":").Append(Json.Q(Name ?? "")).Append(",\"ip\":").Append(Json.Q((Ip ?? "").Trim()))
               .Append(",\"brand\":").Append(Json.Q(Brand ?? "dahua")).Append(",\"rtsp\":").Append(Json.Q((Rtsp ?? "").Trim()))
               .Append(",\"rtspHd\":").Append(Json.Q((RtspHd ?? "").Trim())).Append(",\"ptz\":").Append(Ptz ? "true" : "false")
               .Append(",\"enabled\":").Append(Enabled ? "true" : "false").Append(",\"probe\":").Append(Json.Q(Probe ?? "manual"))
@@ -96,6 +98,23 @@ namespace CctvViewer
         }
     }
 
+    /// <summary>Satu NVR di daftar. Password hanya terisi jika diketik; kosong = pertahankan yang tersimpan.</summary>
+    sealed class NvrRow
+    {
+        public string Id { get; set; }
+        public string Name { get; set; }
+        public string Url = "", User = "", Pass = "", Scheme = "Digest", CamUser = "", CamPass = "";
+        public bool SelfSigned = true, HasPass, HasCamPass;
+        public NvrRow() { Id = "nvr1"; Name = "NVR 1"; }
+
+        public string ToJson()
+        {
+            return "{\"id\":" + Json.Q(Id) + ",\"name\":" + Json.Q(Name ?? "") + ",\"url\":" + Json.Q((Url ?? "").Trim()) + ",\"user\":" + Json.Q((User ?? "").Trim()) +
+                   ",\"pass\":" + Json.Q(Pass ?? "") + ",\"scheme\":" + Json.Q(Scheme ?? "Digest") + ",\"selfSigned\":" + (SelfSigned ? "true" : "false") +
+                   ",\"camUser\":" + Json.Q((CamUser ?? "").Trim()) + ",\"camPass\":" + Json.Q(CamPass ?? "") + "}";
+        }
+    }
+
     /// <summary>Tab "Kamera NVR": registrasi NVR, pemindaian CAM 1..N, dan editor daftar kamera (termasuk fisheye dan urutan tampil). Berbicara dengan NvrBridge.</summary>
     sealed class CameraTab : UserControl
     {
@@ -105,10 +124,13 @@ namespace CctvViewer
         readonly BindingList<CamRow> rows = new BindingList<CamRow>();
         readonly DataGridView grid = new DataGridView();
 
-        readonly TextBox nvrUrl = new TextBox { Width = 190 }, nvrUser = new TextBox { Width = 100 }, nvrPass = new TextBox { Width = 100, UseSystemPasswordChar = true };
+        readonly BindingList<NvrRow> nvrs = new BindingList<NvrRow>();
+        readonly ComboBox nvrSel = new ComboBox { Width = 150, DropDownStyle = ComboBoxStyle.DropDownList };
+        readonly TextBox nvrName = new TextBox { Width = 110 };
+        readonly TextBox nvrUrl = new TextBox { Width = 170 }, nvrUser = new TextBox { Width = 90 }, nvrPass = new TextBox { Width = 90, UseSystemPasswordChar = true };
         readonly ComboBox scheme = new ComboBox { Width = 70, DropDownStyle = ComboBoxStyle.DropDownList };
-        readonly CheckBox selfSigned = new CheckBox { Text = "Terima sertifikat NVR self-signed", AutoSize = true, Checked = true };
-        readonly TextBox camUser = new TextBox { Width = 100 }, camPass = new TextBox { Width = 100, UseSystemPasswordChar = true };
+        readonly CheckBox selfSigned = new CheckBox { Text = "Sertifikat self-signed OK", AutoSize = true, Checked = true };
+        readonly TextBox camUser = new TextBox { Width = 90 }, camPass = new TextBox { Width = 90, UseSystemPasswordChar = true };
         readonly ComboBox defBrand = new ComboBox { Width = 70, DropDownStyle = ComboBoxStyle.DropDownList };
         readonly NumericUpDown maxCam = new NumericUpDown { Minimum = 1, Maximum = 128, Value = 64, Width = 60 };
         readonly TextBox probeTime = new TextBox { Width = 120 };
@@ -129,8 +151,8 @@ namespace CctvViewer
         readonly Label status = new Label { AutoSize = true, Dock = DockStyle.Fill, Padding = new Padding(2, 6, 2, 0) };
         readonly Timer poll = new Timer { Interval = 2000 };
         bool loaded, loading, busy;
-        bool hasNvrPass, hasCamPass;
-        string scanId;
+        bool loadingNvr;
+        string scanId, scanNvrId;
 
         public bool Dirty { get; private set; }
 
@@ -148,11 +170,21 @@ namespace CctvViewer
             // ----- atas: NVR + pemindaian -----
             var top = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = true, Padding = new Padding(4) };
             Control L(string t, Control c) { var p = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, Margin = new Padding(0, 0, 10, 4) }; p.Controls.Add(new Label { Text = t, AutoSize = true, Padding = new Padding(0, 5, 3, 0) }); p.Controls.Add(c); return p; }
-            top.Controls.Add(L("Alamat NVR", nvrUrl)); top.Controls.Add(L("User", nvrUser)); top.Controls.Add(L("Password", nvrPass)); top.Controls.Add(L("Login", scheme)); top.Controls.Add(selfSigned);
+            nvrSel.DataSource = nvrs; nvrSel.DisplayMember = "Name"; nvrSel.ValueMember = "Id";
+            var addNvr = new Button { Text = "Tambah NVR", AutoSize = true };
+            var delNvr = new Button { Text = "Hapus NVR", AutoSize = true };
+            top.Controls.Add(L("NVR", nvrSel)); top.Controls.Add(addNvr); top.Controls.Add(delNvr);
+            top.Controls.Add(L("Nama", nvrName)); top.Controls.Add(L("Alamat", nvrUrl)); top.Controls.Add(L("User", nvrUser)); top.Controls.Add(L("Password", nvrPass)); top.Controls.Add(L("Login", scheme)); top.Controls.Add(selfSigned);
             top.SetFlowBreak(selfSigned, true);
-            top.Controls.Add(L("User kamera", camUser)); top.Controls.Add(L("Password kamera", camPass)); top.Controls.Add(L("Merek kamera baru", defBrand));
+            top.Controls.Add(L("User kamera (NVR ini)", camUser)); top.Controls.Add(L("Password kamera", camPass)); top.Controls.Add(L("Merek kamera baru", defBrand));
             top.Controls.Add(L("Uji CAM 1 sampai", maxCam)); top.Controls.Add(L("Waktu uji (kosong = otomatis)", probeTime));
             top.Controls.Add(scanBtn); top.Controls.Add(cancelBtn); top.Controls.Add(bar); top.Controls.Add(scanMsg);
+            addNvr.Click += (s2, e2) => AddNvr();
+            delNvr.Click += (s2, e2) => DeleteNvr();
+            nvrSel.SelectedIndexChanged += (s2, e2) => ShowNvr();
+            EventHandler pushNvr = (s2, e2) => PushNvr();
+            nvrName.TextChanged += pushNvr; nvrUrl.TextChanged += pushNvr; nvrUser.TextChanged += pushNvr; nvrPass.TextChanged += pushNvr;
+            camUser.TextChanged += pushNvr; camPass.TextChanged += pushNvr; scheme.SelectedIndexChanged += pushNvr; selfSigned.CheckedChanged += pushNvr;
 
             // ----- grid -----
             grid.Dock = DockStyle.Fill; grid.AllowUserToAddRows = false; grid.AllowUserToDeleteRows = false; grid.AutoGenerateColumns = false;
@@ -160,7 +192,9 @@ namespace CctvViewer
             grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None; grid.BackgroundColor = SystemColors.Window;
             DataGridViewColumn C(DataGridViewColumn c, string head, string prop, int w) { c.HeaderText = head; c.DataPropertyName = prop; c.Width = w; grid.Columns.Add(c); return c; }
             C(new DataGridViewCheckBoxColumn(), "Aktif", "Enabled", 42);
-            C(new DataGridViewTextBoxColumn(), "CAM", "Cam", 45);
+            C(new DataGridViewTextBoxColumn(), "No.", "Num", 40);
+            C(new DataGridViewComboBoxColumn { DataSource = nvrs, ValueMember = "Id", DisplayMember = "Name" }, "NVR", "Nvr", 95);
+            C(new DataGridViewTextBoxColumn(), "CAM", "Cam", 42);
             C(new DataGridViewTextBoxColumn { ReadOnly = true }, "Status NVR", "Probe", 70);
             C(new DataGridViewTextBoxColumn(), "Nama", "Name", 150);
             C(new DataGridViewTextBoxColumn(), "IP kamera", "Ip", 110);
@@ -214,9 +248,6 @@ namespace CctvViewer
             scanBtn.Click += async (s, e) => await StartScanAsync();
             cancelBtn.Click += async (s, e) => { try { await api.SendAsync("POST", "api/registry/scan?cancel=1&id=" + Uri.EscapeDataString(scanId ?? ""), "{}"); } catch (Exception ex) { scanMsg.Text = ex.Message; } };
             poll.Tick += async (s, e) => await PollAsync();
-            foreach (var tb in new[] { nvrUrl, nvrUser, nvrPass, camUser, camPass }) tb.TextChanged += (s, e) => { if (!loading) Dirty = true; };
-            scheme.SelectedIndexChanged += (s, e) => { if (!loading) Dirty = true; };
-            selfSigned.CheckedChanged += (s, e) => { if (!loading) Dirty = true; };
             Disposed += (s, e) => poll.Dispose();
             ShowFe();
         }
@@ -254,13 +285,72 @@ namespace CctvViewer
             Dirty = true;
         }
 
+        int FreeNum(int prefer)
+        {
+            var used = new HashSet<int>(rows.Select(x => x.Num));
+            if (prefer >= 1 && prefer <= 999 && !used.Contains(prefer)) return prefer;
+            int n = 1; while (used.Contains(n)) n++;
+            return n;
+        }
+
+        NvrRow SelNvr { get { return nvrSel.SelectedItem as NvrRow; } }
+
         void AddRow()
         {
-            int n = 1; var used = new HashSet<int>(rows.Select(x => x.Cam));
-            while (used.Contains(n)) n++;
-            rows.Add(new CamRow { Cam = n, Name = "Kamera " + n, Brand = (string)defBrand.SelectedItem ?? "dahua" });
+            var nv = SelNvr;
+            int ch = 1;
+            if (nv != null) { var usedCh = new HashSet<int>(rows.Where(x => x.Nvr == nv.Id).Select(x => x.Cam)); while (usedCh.Contains(ch)) ch++; }
+            int num = FreeNum(ch);
+            rows.Add(new CamRow { Num = num, Cam = ch, Nvr = nv != null ? nv.Id : "", Name = "Kamera " + num, Brand = (string)defBrand.SelectedItem ?? "dahua" });
             Dirty = true;
-            grid.ClearSelection(); grid.CurrentCell = grid.Rows[grid.Rows.Count - 1].Cells[3];
+            grid.ClearSelection(); grid.CurrentCell = grid.Rows[grid.Rows.Count - 1].Cells[5];
+        }
+
+        // ---------- NVR ----------
+        void ShowNvr()
+        {
+            var n = SelNvr;
+            loadingNvr = true;
+            try
+            {
+                foreach (Control c in new Control[] { nvrName, nvrUrl, nvrUser, nvrPass, scheme, selfSigned, camUser, camPass, scanBtn }) c.Enabled = n != null;
+                if (n == null) { nvrName.Text = nvrUrl.Text = nvrUser.Text = nvrPass.Text = camUser.Text = camPass.Text = ""; return; }
+                nvrName.Text = n.Name; nvrUrl.Text = n.Url; nvrUser.Text = n.User; nvrPass.Text = n.Pass;
+                scheme.SelectedItem = n.Scheme; if (scheme.SelectedIndex < 0) scheme.SelectedIndex = 0;
+                selfSigned.Checked = n.SelfSigned; camUser.Text = n.CamUser; camPass.Text = n.CamPass;
+                nvrPass.Tag = n.HasPass ? "(tersimpan)" : null; camPass.Tag = n.HasCamPass ? "(tersimpan)" : null;
+            }
+            finally { loadingNvr = false; }
+        }
+
+        void PushNvr()
+        {
+            if (loadingNvr || loading) return;
+            var n = SelNvr; if (n == null) return;
+            bool renamed = n.Name != nvrName.Text;
+            n.Name = nvrName.Text; n.Url = nvrUrl.Text; n.User = nvrUser.Text; n.Pass = nvrPass.Text; n.Scheme = (string)scheme.SelectedItem ?? "Digest";
+            n.SelfSigned = selfSigned.Checked; n.CamUser = camUser.Text; n.CamPass = camPass.Text;
+            Dirty = true;
+            if (renamed) { loadingNvr = true; try { int i = nvrs.IndexOf(n); nvrs.ResetItem(i); nvrSel.SelectedIndex = i; } finally { loadingNvr = false; } }
+        }
+
+        void AddNvr()
+        {
+            int k = 1; var ids = new HashSet<string>(nvrs.Select(x => x.Id));
+            while (ids.Contains("nvr" + k)) k++;
+            var n = new NvrRow { Id = "nvr" + k, Name = "NVR " + k };
+            nvrs.Add(n); nvrSel.SelectedItem = n; Dirty = true;
+            nvrName.Focus(); nvrName.SelectAll();
+        }
+
+        void DeleteNvr()
+        {
+            var n = SelNvr; if (n == null) return;
+            int cnt = rows.Count(x => x.Nvr == n.Id);
+            if (MessageBox.Show(this, "Hapus NVR \"" + n.Name + "\"" + (cnt > 0 ? " beserta " + cnt + " kameranya dari daftar" : "") + "?", Program.AppName, MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            foreach (var r in rows.Where(x => x.Nvr == n.Id).ToList()) rows.Remove(r);
+            nvrs.Remove(n); Dirty = true;
+            ShowNvr();
         }
 
         void DeleteRow()
@@ -289,19 +379,22 @@ namespace CctvViewer
             {
                 var d = await api.SendAsync("GET", "api/registry", null, 6000);
                 loading = true;
-                var nvr = MiniJson.Obj(d.ContainsKey("nvr") ? d["nvr"] : null) ?? new Dictionary<string, object>();
-                nvrUrl.Text = MiniJson.Str(nvr, "url"); nvrUser.Text = MiniJson.Str(nvr, "user");
-                scheme.SelectedItem = MiniJson.Str(nvr, "scheme", "Digest"); if (scheme.SelectedIndex < 0) scheme.SelectedIndex = 0;
-                selfSigned.Checked = MiniJson.Bool(nvr, "selfSigned", true);
-                hasNvrPass = MiniJson.Bool(nvr, "hasPass", false); nvrPass.Text = "";
-                var cc = MiniJson.Obj(d.ContainsKey("camCreds") ? d["camCreds"] : null) ?? new Dictionary<string, object>();
-                camUser.Text = MiniJson.Str(cc, "user"); hasCamPass = MiniJson.Bool(cc, "hasPass", false); camPass.Text = "";
-                rows.Clear();
+                nvrs.Clear(); rows.Clear();
+                foreach (var o in MiniJson.List(d, "nvrs") ?? new List<object>())
+                {
+                    var n = MiniJson.Obj(o); if (n == null) continue;
+                    nvrs.Add(new NvrRow
+                    {
+                        Id = MiniJson.Str(n, "id", "nvr1"), Name = MiniJson.Str(n, "name"), Url = MiniJson.Str(n, "url"), User = MiniJson.Str(n, "user"),
+                        Scheme = MiniJson.Str(n, "scheme", "Digest"), SelfSigned = MiniJson.Bool(n, "selfSigned", true), CamUser = MiniJson.Str(n, "camUser"),
+                        HasPass = MiniJson.Bool(n, "hasPass", false), HasCamPass = MiniJson.Bool(n, "hasCamPass", false),
+                    });
+                }
                 foreach (var o in MiniJson.List(d, "cams") ?? new List<object>()) { var c = MiniJson.Obj(o); if (c != null) rows.Add(CamRow.FromJson(c)); }
                 loading = false;
                 loaded = true; Dirty = false;
-                SetStatus((hasNvrPass ? "Password NVR tersimpan (kosongkan kolom jika tidak diubah). " : "") + rows.Count + " kamera di daftar.");
-                ShowFe();
+                SetStatus(nvrs.Count + " NVR, " + rows.Count + " kamera. Password yang sudah tersimpan tidak ditampilkan; kosongkan kolomnya jika tidak diubah.");
+                loadingNvr = false; ShowNvr(); ShowFe();
             }
             catch (Exception e) { loading = false; SetStatus("Tidak bisa memuat: " + e.Message, true); }
             finally { busy = false; }
@@ -310,14 +403,12 @@ namespace CctvViewer
         string Payload(bool forScan)
         {
             var sb = new StringBuilder();
-            sb.Append("{\"nvr\":{\"url\":").Append(Json.Q(nvrUrl.Text.Trim())).Append(",\"user\":").Append(Json.Q(nvrUser.Text.Trim()))
-              .Append(",\"pass\":").Append(Json.Q(nvrPass.Text)).Append(",\"scheme\":").Append(Json.Q((string)scheme.SelectedItem ?? "Digest"))
-              .Append(",\"selfSigned\":").Append(selfSigned.Checked ? "true" : "false").Append("},");
-            sb.Append("\"camCreds\":{\"user\":").Append(Json.Q(camUser.Text.Trim())).Append(",\"pass\":").Append(Json.Q(camPass.Text)).Append("},\"cams\":[");
+            sb.Append("{\"nvrs\":[").Append(string.Join(",", nvrs.Select(n => n.ToJson()))).Append("],\"cams\":[");
             if (!forScan) sb.Append(string.Join(",", rows.Select(r => r.ToJson())));
             sb.Append("]");
             if (forScan)
             {
+                sb.Append(",\"scanNvr\":").Append(Json.Q(SelNvr != null ? SelNvr.Id : ""));
                 sb.Append(",\"max\":").Append((int)maxCam.Value);
                 string pt = probeTime.Text.Trim();
                 if (pt.Length > 0) sb.Append(",\"probeTime\":").Append(Json.Q(pt));
@@ -367,8 +458,11 @@ namespace CctvViewer
         async Task StartScanAsync()
         {
             if (!loaded) { scanMsg.Text = "Daftar belum dimuat."; return; }
-            if (nvrUrl.Text.Trim().Length == 0 || nvrUser.Text.Trim().Length == 0) { scanMsg.ForeColor = Color.Firebrick; scanMsg.Text = "Isi alamat NVR dan user."; return; }
-            if (nvrPass.Text.Length == 0 && !hasNvrPass) { scanMsg.ForeColor = Color.Firebrick; scanMsg.Text = "Isi password NVR."; return; }
+            var sel = SelNvr;
+            if (sel == null) { scanMsg.ForeColor = Color.Firebrick; scanMsg.Text = "Tambah NVR dulu."; return; }
+            if (sel.Url.Trim().Length == 0 || sel.User.Trim().Length == 0) { scanMsg.ForeColor = Color.Firebrick; scanMsg.Text = "Isi alamat NVR dan user."; return; }
+            if (sel.Pass.Length == 0 && !sel.HasPass) { scanMsg.ForeColor = Color.Firebrick; scanMsg.Text = "Isi password NVR."; return; }
+            scanNvrId = sel.Id;
             scanMsg.ForeColor = Color.DimGray; scanMsg.Text = ""; others.Text = "";
             try
             {
@@ -410,13 +504,12 @@ namespace CctvViewer
                 int cam = MiniJson.Int(r, "cam", 0);
                 if (MiniJson.Str(r, "state") == "rec")
                 {
-                    var row = rows.FirstOrDefault(x => x.Cam == cam);
+                    var row = rows.FirstOrDefault(x => x.Cam == cam && x.Nvr == scanNvrId);
                     if (row == null)
                     {
-                        // sisipkan menurut nomor CAM agar urutan awal rapi
-                        row = new CamRow { Cam = cam, Name = "Kamera " + cam, Brand = (string)defBrand.SelectedItem ?? "dahua" };
-                        int at = 0; while (at < rows.Count && rows[at].Cam < cam) at++;
-                        rows.Insert(at, row);
+                        int num = FreeNum(cam);
+                        row = new CamRow { Num = num, Cam = cam, Nvr = scanNvrId ?? "", Name = "Kamera " + num, Brand = (string)defBrand.SelectedItem ?? "dahua" };
+                        rows.Add(row);
                     }
                     if (row.Probe != "rec") { row.Probe = "rec"; rows.ResetItem(rows.IndexOf(row)); }
                     Dirty = true;

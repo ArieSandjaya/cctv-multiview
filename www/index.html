@@ -983,7 +983,6 @@ async function probeBridge() {
   try {
     const r = await fetch(root + 'api/info', {cache: 'no-store', signal: ctl.signal});
     if (!r.ok) throw 0;
-    $('setup').href = root + 'setup.html'; $('setup').hidden = false;
     const c = await fetch(root + 'api/cams', {cache: 'no-store', signal: ctl.signal});
     if (c.ok) {
       const j = await c.json();

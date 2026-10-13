@@ -70,7 +70,11 @@ namespace CctvViewer
             string wv = WebViewVersion();
             if (wv == null)
             {
-                Native.Message("WebView2 Runtime belum terpasang di PC ini.\n\nUnduh \"Evergreen Bootstrapper\" dari https://developer.microsoft.com/microsoft-edge/webview2/ , pasang, lalu buka CctvViewer lagi.\n(Windows 11 dan Windows 10 yang rutin diperbarui biasanya sudah memilikinya.)", AppName, true);
+                string installed = InstalledRuntimeVersion();
+                Log.Error("WebView2 tidak bisa dimuat: " + WebViewError + " | terdeteksi di registry: " + (installed ?? "tidak ada"));
+                Native.Message(installed == null
+                    ? "WebView2 Runtime tidak ditemukan di PC ini.\n\nUnduh \"Evergreen Bootstrapper\" dari https://developer.microsoft.com/microsoft-edge/webview2/ , pasang, lalu buka CctvViewer lagi.\n\nRincian teknis: " + WebViewError
+                    : "WebView2 Runtime terpasang (versi " + installed + ") tetapi CctvViewer gagal memuatnya.\n\nRincian teknis:\n" + WebViewError + "\n\nPeriksa bahwa folder x64\\WebView2Loader.dll (dan x86\\) ada di samping CctvViewer.exe, dan folder ini tidak diblokir Windows (klik kanan zip > Properties > Unblock sebelum diekstrak).\nRincian juga ada di data\\cctvviewer.log.", AppName, true);
                 return 1;
             }
             Log.Info("=== CctvViewer mulai. Layar=" + st.Screens + ", kamera/layar=" + st.CamsPerScreen + ", WebView2=" + wv + " ===");
@@ -85,10 +89,33 @@ namespace CctvViewer
             return 0;
         }
 
+        public static string WebViewError = "";
+
         public static string WebViewVersion()
         {
-            try { return Microsoft.Web.WebView2.Core.CoreWebView2Environment.GetAvailableBrowserVersionString(); }
-            catch { return null; }
+            try
+            {
+                string v = Microsoft.Web.WebView2.Core.CoreWebView2Environment.GetAvailableBrowserVersionString();
+                if (string.IsNullOrEmpty(v)) WebViewError = "GetAvailableBrowserVersionString mengembalikan kosong.";
+                return string.IsNullOrEmpty(v) ? null : v;
+            }
+            catch (Exception e) { WebViewError = e.GetType().Name + ": " + e.Message; return null; }
+        }
+
+        /// <summary>Versi runtime menurut registry (untuk membedakan "tidak terpasang" dari "gagal dimuat").</summary>
+        static string InstalledRuntimeVersion()
+        {
+            const string guid = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}";
+            string[] keys =
+            {
+                @"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\" + guid,
+                @"SOFTWARE\Microsoft\EdgeUpdate\Clients\" + guid,
+            };
+            foreach (var hive in new[] { Microsoft.Win32.Registry.LocalMachine, Microsoft.Win32.Registry.CurrentUser })
+                foreach (var k in keys)
+                    try { using (var rk = hive.OpenSubKey(k)) { var v = rk != null ? rk.GetValue("pv") as string : null; if (!string.IsNullOrEmpty(v) && v != "0.0.0.0") return v; } }
+                    catch { }
+            return null;
         }
 
         static int SetAutostart(string mode)
@@ -147,7 +174,7 @@ namespace CctvViewer
             for (int i = 0; i < mons.Count; i++) sb.AppendLine("  Layar " + (i + 1) + ": " + mons[i] + (i >= st.Screens ? "   (tidak dipakai)" : ""));
             if (mons.Count < st.Screens) sb.AppendLine("  PERHATIAN: dibutuhkan " + st.Screens + " monitor. Pilih mode 'Extend' dan cek kabel HDMI.");
             string wv = WebViewVersion();
-            sb.AppendLine("WebView2 Runtime: " + (wv ?? "TIDAK TERPASANG (unduh Evergreen Bootstrapper dari Microsoft)"));
+            sb.AppendLine("WebView2 Runtime: " + (wv ?? ("GAGAL DIMUAT: " + WebViewError + " (registry: " + (InstalledRuntimeVersion() ?? "tidak ada") + ")")));
             sb.AppendLine("go2rtc.exe: " + (File.Exists(st.Go2rtcExe) ? "ada" : "TIDAK ADA di " + st.Go2rtcExe));
             sb.AppendLine("go2rtc.yaml: " + (File.Exists(st.Go2rtcConfig) ? "ada" : "TIDAK ADA di " + st.Go2rtcConfig));
             sb.AppendLine("NvrBridge: " + (!st.StartNvrBridge ? "dimatikan di konfigurasi" : File.Exists(st.NvrBridgeExe) ? "ada" : "tidak ada (playback/PTZ/registrasi tidak aktif)"));

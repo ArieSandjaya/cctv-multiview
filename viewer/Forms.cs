@@ -30,8 +30,8 @@ namespace CctvViewer
 
             var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 48, Padding = new Padding(6), FlowDirection = FlowDirection.LeftToRight, WrapContents = true };
             Button B(string text, Action a) { var b = new Button { Text = text, AutoSize = true, Padding = new Padding(6, 2, 6, 2) }; b.Click += (s, e) => a(); buttons.Controls.Add(b); return b; }
-            B("Registrasi NVR", ctx.ShowSetup);
-            B("Pengaturan", () => { using (var f = new SettingsForm(ctx)) f.ShowDialog(this); });
+            B("Kamera NVR", () => ctx.ShowSettings(SettingsForm.TabKamera));
+            B("Pengaturan", () => ctx.ShowSettings(SettingsForm.TabLayar));
             B("Kenali layar", () => IdentifyForm.Flash(ctx.Settings));
             B("Muat ulang layar", ctx.ReloadAll);
             B("Folder log", () => { try { Process.Start("explorer.exe", "\"" + ctx.Settings.DataDir + "\""); } catch { } });
@@ -52,43 +52,6 @@ namespace CctvViewer
         {
             if (!force && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; Hide(); return; }   // ditutup = disembunyikan; program tetap berjalan
             base.OnFormClosing(e);
-        }
-    }
-
-    /// <summary>Registrasi NVR: memuat halaman setup.html dari NvrBridge di dalam jendela ini.</summary>
-    sealed class SetupForm : Form
-    {
-        readonly Core core;
-        readonly WebView2 web = new WebView2 { Dock = DockStyle.Fill };
-
-        public SetupForm(Core core)
-        {
-            this.core = core;
-            Text = "Registrasi NVR";
-            StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(1200, 820);
-            Controls.Add(web);
-            Shown += async (s, e) => await InitAsync();
-        }
-
-        async System.Threading.Tasks.Task InitAsync()
-        {
-            try
-            {
-                string profile = Path.Combine(core.St.DataDir, "profile-setup");
-                Directory.CreateDirectory(profile);
-                var env = await CoreWebView2Environment.CreateAsync(null, profile, new CoreWebView2EnvironmentOptions());
-                await web.EnsureCoreWebView2Async(env);
-                web.CoreWebView2.Settings.AreDevToolsEnabled = false;
-                web.CoreWebView2.NavigationCompleted += (o, a) =>
-                {
-                    if (!a.IsSuccess)
-                        web.NavigateToString("<html><body style='font:14px sans-serif;background:#0b0e12;color:#e6eaf0;padding:24px'>NvrBridge belum berjalan di " + core.SetupUrl +
-                            ".<br>Pastikan <b>StartNvrBridge=true</b> dan NvrBridge\\nvrbridge.config ada, lalu buka jendela ini lagi.</body></html>");
-                };
-                web.CoreWebView2.Navigate(core.SetupUrl.ToString());
-            }
-            catch (Exception ex) { MessageBox.Show(this, "Tidak bisa membuka halaman registrasi: " + ex.Message, Program.AppName); }
         }
     }
 

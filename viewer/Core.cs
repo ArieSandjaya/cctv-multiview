@@ -80,7 +80,45 @@ namespace CctvViewer
         public string PageUrl(int index)
         {
             return St.Go2rtcApi.ToString() + "?screen=" + (index + 1) + "&screens=" + St.Screens + "&per=" + St.CamsPerScreen +
-                   "&ctl=" + St.ControlPort + "&reload=" + St.ReloadMinutes;
+                   "&ctl=" + St.ControlPort + "&reload=" + St.ReloadMinutes +
+                   "&title=" + Uri.EscapeDataString(St.PageTitle) + "&mode=" + Uri.EscapeDataString(St.PageMode) + "&dewarp=" + St.DewarpMax +
+                   "&bridge=" + Uri.EscapeDataString(St.BridgeUrl.GetLeftPart(UriPartial.Authority));
+        }
+
+        static string Yq(string s) { return "'" + s.Replace("'", "''") + "'"; }
+
+        /// <summary>Menulis go2rtc.settings.yaml dari pengaturan di form (port, akses jaringan, folder halaman). Dibaca go2rtc setelah go2rtc.yaml sehingga menimpanya.</summary>
+        public static void WriteGo2rtcOverride(Settings st)
+        {
+            string host = st.AllowLan ? "" : "127.0.0.1";
+            var sb = new StringBuilder();
+            sb.AppendLine("# Dibuat otomatis oleh CctvViewer dari form Pengaturan. Jangan diedit; perubahan akan tertimpa.");
+            sb.AppendLine("api:");
+            sb.AppendLine("  listen: " + Yq(host + ":" + st.Go2rtcApi.Port));
+            sb.AppendLine("  static_dir: " + Yq(st.WwwDir));
+            sb.AppendLine("rtsp:");
+            sb.AppendLine("  listen: " + Yq(st.RtspPort > 0 ? host + ":" + st.RtspPort : ""));
+            sb.AppendLine("webrtc:");
+            sb.AppendLine("  listen: " + Yq(host + ":" + st.WebrtcPort));
+            sb.AppendLine("  candidates:");
+            sb.AppendLine("    - " + Yq("127.0.0.1:" + st.WebrtcPort));
+            sb.AppendLine("log:");
+            sb.AppendLine("  level: " + st.Go2rtcLog);
+            Directory.CreateDirectory(Path.GetDirectoryName(st.Go2rtcOverride));
+            File.WriteAllText(st.Go2rtcOverride, sb.ToString(), new UTF8Encoding(false));
+        }
+
+        /// <summary>Menyelaraskan nvrbridge.config dengan pengaturan CctvViewer (port, asal halaman, go2rtc.yaml), agar tidak perlu diedit manual.</summary>
+        public static void SyncBridgeConfig(Settings st)
+        {
+            var v = new Dictionary<string, string>
+            {
+                { "ListenPrefix", (st.AllowLan ? "http://+:" : "http://127.0.0.1:") + st.BridgeUrl.Port + "/" },
+                { "AllowOrigin", st.Go2rtcApi.GetLeftPart(UriPartial.Authority) },
+                { "Go2rtcApi", st.Go2rtcApi.GetLeftPart(UriPartial.Authority) },
+                { "Go2rtcYaml", st.Go2rtcConfig },
+            };
+            ConfigWriter.Set(st.NvrBridgeConfig, v);
         }
 
         public Uri SetupUrl { get { return new Uri(St.BridgeUrl, "setup.html"); } }
@@ -90,17 +128,26 @@ namespace CctvViewer
         {
             Go2rtcOwn = !Go2rtcUp(St);
             if (Go2rtcOwn && !File.Exists(St.Go2rtcExe)) return "go2rtc.exe tidak ditemukan:\n" + St.Go2rtcExe + "\n\nUnduh go2rtc_win64.zip dari github.com/AlexxIT/go2rtc/releases dan taruh go2rtc.exe di folder yang sama dengan CctvViewer.exe.";
-            if (Go2rtcOwn && !File.Exists(St.Go2rtcConfig)) return "go2rtc.yaml tidak ditemukan:\n" + St.Go2rtcConfig;
+            if (Go2rtcOwn && !File.Exists(St.Go2rtcConfig))
+            {
+                // Pertama kali dijalankan: buat go2rtc.yaml kosong. Kamera diisi lewat Pengaturan > Kamera NVR.
+                try { File.WriteAllText(St.Go2rtcConfig, "# Dikelola oleh CctvViewer (Pengaturan > Kamera NVR).\nstreams:\n", new UTF8Encoding(false)); }
+                catch (Exception e) { return "go2rtc.yaml tidak ada dan tidak bisa dibuat:\n" + St.Go2rtcConfig + "\n\n" + e.Message; }
+            }
+            try { if (Go2rtcOwn) WriteGo2rtcOverride(St); }
+            catch (Exception e) { return "Tidak bisa menulis pengaturan go2rtc:\n" + e.Message; }
+            try { if (St.StartNvrBridge && File.Exists(St.NvrBridgeExe)) { Directory.CreateDirectory(Path.GetDirectoryName(St.NvrBridgeConfig)); SyncBridgeConfig(St); } }
+            catch (Exception e) { Log.Warn("nvrbridge.config tidak bisa diselaraskan: " + e.Message); }
             return null;
         }
 
         public void Start()
         {
             if (Go2rtcOwn)
-                go2rtc = new ManagedProcess("go2rtc", St.Go2rtcExe, "-config \"" + St.Go2rtcConfig + "\"", Path.GetDirectoryName(St.Go2rtcConfig),
+                go2rtc = new ManagedProcess("go2rtc", St.Go2rtcExe, "-config \"" + St.Go2rtcConfig + "\" -config \"" + St.Go2rtcOverride + "\"", Path.GetDirectoryName(St.Go2rtcConfig),
                     new FileLog(Path.Combine(St.DataDir, "go2rtc.log")), job);
             else Log.Info("go2rtc sudah berjalan di " + St.Go2rtcApi + "; dipakai apa adanya.");
-            if (St.StartNvrBridge && File.Exists(St.NvrBridgeExe) && File.Exists(St.NvrBridgeConfig))
+            if (St.StartNvrBridge && File.Exists(St.NvrBridgeExe))
                 bridge = new ManagedProcess("NvrBridge", St.NvrBridgeExe, "--config \"" + St.NvrBridgeConfig + "\"", Path.GetDirectoryName(St.NvrBridgeExe),
                     new FileLog(Path.Combine(St.DataDir, "nvrbridge.log")), job);
             else if (St.StartNvrBridge) Log.Warn("NvrBridge tidak dijalankan (berkas exe/config tidak ditemukan). Playback, PTZ, peta, dan registrasi NVR tidak aktif.");
@@ -138,15 +185,12 @@ namespace CctvViewer
                         int n = CameraCount(St);
                         Log.Info("go2rtc siap. Kamera terdaftar: " + n + " (kapasitas " + St.Screens * St.CamsPerScreen + ").");
                         if (n > St.Screens * St.CamsPerScreen) Log.Warn((n - St.Screens * St.CamsPerScreen) + " kamera tidak muat di " + St.Screens + " layar dan tidak ditampilkan.");
-                        if (n == 0) Log.Warn("Belum ada kamera di go2rtc.yaml. Pakai Registrasi NVR atau isi go2rtc.yaml.");
+                        if (n == 0) Log.Warn("Belum ada kamera. Buka Pengaturan > Kamera NVR.");
                     }
                 }
                 catch (Exception e) { Log.Warn("Loop utama: " + e.Message); }
             }
         }
-
-        public bool BridgeManaged { get { return bridge != null; } }
-        public void RestartBridge() { if (bridge != null) { Log.Info("NvrBridge dimulai ulang (pengaturan berubah)."); bridge.Restart(); } }
 
         public string StatusText()
         {

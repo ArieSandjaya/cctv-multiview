@@ -40,7 +40,8 @@ namespace CctvViewer
 
             var menu = new ContextMenuStrip();
             menu.Items.Add("Panel kontrol", null, (s, e) => ShowPanel());
-            menu.Items.Add("Registrasi NVR", null, (s, e) => ShowSetup());
+            menu.Items.Add("Kamera NVR", null, (s, e) => ShowSettings(SettingsForm.TabKamera));
+            menu.Items.Add("Pengaturan", null, (s, e) => ShowSettings(SettingsForm.TabLayar));
             menu.Items.Add("Muat ulang semua layar", null, (s, e) => ReloadAll());
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Keluar", null, (s, e) => Quit());
@@ -126,11 +127,14 @@ namespace CctvViewer
             panel.Activate(); panel.BringToFront();
         }
 
-        public void ShowSetup()
+        SettingsForm settingsForm;
+
+        public void ShowSettings(int tab)
         {
-            var f = new SetupForm(core);
-            f.Show();
-            f.Activate(); f.BringToFront();
+            if (settingsForm == null || settingsForm.IsDisposed) settingsForm = new SettingsForm(this, tab);
+            settingsForm.Show();
+            if (settingsForm.WindowState == FormWindowState.Minimized) settingsForm.WindowState = FormWindowState.Normal;
+            settingsForm.Activate(); settingsForm.BringToFront();
         }
 
         public void Restart()

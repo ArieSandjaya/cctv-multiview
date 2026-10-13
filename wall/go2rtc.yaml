@@ -1,5 +1,5 @@
-# go2rtc untuk PC video wall (CctvViewer). Satu-satunya file untuk menambah/mengubah kamera.
-# Setelah diubah: tutup CctvViewer (tombol "Keluar") lalu buka lagi.
+# go2rtc untuk PC video wall (CctvViewer). Kamera dikelola dari CctvViewer: Pengaturan > Kamera NVR.
+# Port, akses jaringan, dan folder www ditimpa otomatis oleh data\go2rtc.settings.yaml (dari form Pengaturan).
 #
 # File ini berisi password kamera: batasi akses folder, dan jangan masukkan ke Git dengan password asli.
 

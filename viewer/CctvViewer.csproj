@@ -19,8 +19,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Compile Include="..\nvr-bridge\MiniJson.cs" Link="MiniJson.cs" />
-    <Compile Include="..\nvr-bridge\Json.cs" Link="Json.cs" />
+    <!-- JSON kecil dan penyusun string dipakai bersama dengan NvrBridge -->
+    <Compile Include="..\nvr-bridge\MiniJson.cs" Link="Shared\MiniJson.cs" />
+    <Compile Include="..\nvr-bridge\Json.cs" Link="Shared\Json.cs" />
   </ItemGroup>
 
   <ItemGroup>

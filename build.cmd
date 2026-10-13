@@ -23,12 +23,5 @@ if exist go2rtc.exe (
 )
 
 echo.
-echo Selesai. Salin seluruh folder dist\ ke PC video wall, mis. C:\CctvViewer, lalu edit:
-echo   go2rtc.yaml                     (daftar kamera)
-echo   NvrBridge\nvrbridge.config        (NVR dan PTZ, opsional)
-echo   (semua pengaturan juga bisa lewat Panel ^> Pengaturan di aplikasi)
-echo   cctvviewer.config               (jumlah layar, dll.)
-exit /b 0
-:fail
-echo GAGAL membangun. Lihat pesan di atas.
-exit /b 1
+echo Selesai. Salin seluruh folder dist\ ke PC video wall, mis. C:\CctvViewer, jalankan CctvViewer.exe,
+echo lalu atur semuanya lewat ikon tray ^> Pengaturan (tidak perlu mengedit berkas).

@@ -25,7 +25,16 @@ namespace CctvViewer
         public bool StartNvrBridge = true;
         public string NvrBridgeExe, NvrBridgeConfig;
         public int ControlPort = 1985;
+        public string PageTitle = "CCTV Multiview";
+        public string PageMode = "mse,webrtc";
+        public int DewarpMax = 6;
         public string WwwDir;
+        public bool AllowLan = false;              // true = go2rtc dan NvrBridge menerima koneksi dari PC lain
+        public int RtspPort = 0;                   // 0 = stream ulang RTSP dimatikan
+        public int WebrtcPort = 8555;
+        public string Go2rtcLog = "warn";
+        public string Go2rtcOverride;              // berkas yang dibuat otomatis dari pengaturan di atas
+        public string ConfigPath;
 
         public static Settings Load(string path, string baseDir)
         {
@@ -50,9 +59,21 @@ namespace CctvViewer
             s.WebViewArgs = Str(kv, "WebViewArgs", "");
             s.AllowCloseScreen = Bool(kv, "AllowCloseScreen", false);
             s.StartNvrBridge = Bool(kv, "StartNvrBridge", true);
+            s.PageTitle = Str(kv, "PageTitle", "CCTV Multiview");
+            s.PageMode = Str(kv, "PageMode", "mse,webrtc");
+            if (s.PageMode != "mse" && s.PageMode != "webrtc" && s.PageMode != "mse,webrtc" && s.PageMode != "webrtc,mse")
+                throw new ConfigException("PageMode harus mse, webrtc, mse,webrtc atau webrtc,mse.");
+            s.DewarpMax = Int(kv, "DewarpMax", 6, 0, 48);
+            s.AllowLan = Bool(kv, "AllowLan", false);
+            s.RtspPort = Int(kv, "Go2rtcRtspPort", 0, 0, 65535);
+            s.WebrtcPort = Int(kv, "Go2rtcWebrtcPort", 8555, 1, 65535);
+            s.Go2rtcLog = Str(kv, "Go2rtcLog", "warn");
+            if (Array.IndexOf(new[] { "trace", "debug", "info", "warn", "error" }, s.Go2rtcLog) < 0)
+                throw new ConfigException("Go2rtcLog harus trace, debug, info, warn atau error.");
+            s.WwwDir = Rel(baseDir, Str(kv, "WwwDir", "www"));
+            s.ConfigPath = path;
             s.Go2rtcExe = Rel(baseDir, Str(kv, "Go2rtcExe", "go2rtc.exe"));
             s.Go2rtcConfig = Rel(baseDir, Str(kv, "Go2rtcConfig", "go2rtc.yaml"));
-            s.WwwDir = Rel(baseDir, Str(kv, "WwwDir", "www"));
             s.NvrBridgeExe = Rel(baseDir, Str(kv, "NvrBridgeExe", @"NvrBridge\NvrBridge.exe"));
             s.NvrBridgeConfig = Rel(baseDir, Str(kv, "NvrBridgeConfig", @"NvrBridge\nvrbridge.config"));
 
@@ -86,6 +107,7 @@ namespace CctvViewer
 
             string data = Str(kv, "DataDir", "");
             s.DataDir = ResolveDataDir(baseDir, data);
+            s.Go2rtcOverride = Path.Combine(s.DataDir, "go2rtc.settings.yaml");
             return s;
         }
 
@@ -110,6 +132,12 @@ namespace CctvViewer
                 catch { }
             }
             throw new ConfigException("Tidak ada folder data yang bisa ditulis. Isi DataDir di cctvviewer.config.");
+        }
+
+        public string Raw(string key, string def)
+        {
+            var kv = ConfigWriter.Read(ConfigPath);
+            string v; return kv.TryGetValue(key, out v) ? v : def;
         }
 
         static string Rel(string baseDir, string p) { return Path.GetFullPath(Path.IsPathRooted(p) ? p : Path.Combine(baseDir, p)); }

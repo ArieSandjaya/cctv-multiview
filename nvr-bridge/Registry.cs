@@ -20,6 +20,15 @@ namespace NvrBridge
         public string Probe = "manual";    // rec | none | error | manual
         public string Note = "";
 
+        // Kamera fisheye yang mengirim lingkaran mentah: halaman multiview men-dewarp-nya (WebGL).
+        public bool Fisheye;
+        public string FeMount = "ceiling";   // ceiling | wall
+        public int FeFov = 180;              // derajat
+        public string FeTile = "view";       // view | raw
+        public string FeMode = "view";       // view | pano | raw (tampilan awal saat diperbesar)
+        public bool FeMirror;
+        public string FeCx = "", FeCy = "", FeR = "";    // pecahan frame 0-1; kosong = otomatis (tengah)
+
         public string StreamId { get { return "cam" + Cam.ToString("00"); } }
     }
 
@@ -103,10 +112,64 @@ namespace NvrBridge
                 if (rc.Rtsp.Length > 0 && !RtspRx.IsMatch(rc.Rtsp)) throw new ArgumentException("URL RTSP kamera " + rc.Cam + " harus diawali rtsp:// tanpa spasi.");
                 if (rc.RtspHd.Length > 0 && !RtspRx.IsMatch(rc.RtspHd)) throw new ArgumentException("URL RTSP utama kamera " + rc.Cam + " harus diawali rtsp:// tanpa spasi.");
                 if (rc.Ptz && rc.Ip.Length == 0) throw new ArgumentException("Kamera " + rc.Cam + ": PTZ butuh alamat IP.");
+                object feo;
+                if (c.TryGetValue("fe", out feo)) ParseFe(rc, feo);
+                else if (keep != null)
+                {
+                    // Klien yang tidak mengirim "fe" (halaman setup.html) tidak boleh menghapus pengaturan fisheye yang sudah ada.
+                    var old = keep.Cams.Find(x => x.Cam == rc.Cam);
+                    if (old != null)
+                    {
+                        rc.Fisheye = old.Fisheye; rc.FeMount = old.FeMount; rc.FeFov = old.FeFov; rc.FeTile = old.FeTile; rc.FeMode = old.FeMode;
+                        rc.FeMirror = old.FeMirror; rc.FeCx = old.FeCx; rc.FeCy = old.FeCy; rc.FeR = old.FeR;
+                    }
+                }
                 r.Cams.Add(rc);
             }
-            r.Cams.Sort((a, b) => a.Cam.CompareTo(b.Cam));
+            // Urutan baris dipertahankan: itu urutan tampil kamera di layar.
             return r;
+        }
+
+        static void ParseFe(RegCam rc, object feo)
+        {
+            var fe = MiniJson.Obj(feo);
+            if (fe == null) { rc.Fisheye = false; return; }          // null/bukan objek = bukan fisheye
+            rc.Fisheye = true;
+            rc.FeMount = MiniJson.Str(fe, "mount", "ceiling").ToLowerInvariant();
+            if (rc.FeMount != "ceiling" && rc.FeMount != "wall") throw new ArgumentException("Fisheye kamera " + rc.Cam + ": pemasangan harus ceiling atau wall.");
+            rc.FeFov = MiniJson.Int(fe, "fov", 180);
+            if (rc.FeFov < 90 || rc.FeFov > 360) throw new ArgumentException("Fisheye kamera " + rc.Cam + ": sudut pandang harus 90-360 derajat.");
+            rc.FeTile = MiniJson.Str(fe, "tile", "view").ToLowerInvariant();
+            if (rc.FeTile != "view" && rc.FeTile != "raw") throw new ArgumentException("Fisheye kamera " + rc.Cam + ": tampilan tile harus view atau raw.");
+            rc.FeMode = MiniJson.Str(fe, "mode", "view").ToLowerInvariant();
+            if (rc.FeMode != "view" && rc.FeMode != "pano" && rc.FeMode != "raw") throw new ArgumentException("Fisheye kamera " + rc.Cam + ": mode harus view, pano, atau raw.");
+            rc.FeMirror = MiniJson.Bool(fe, "mirror", false);
+            rc.FeCx = Frac(fe, "cx", rc.Cam); rc.FeCy = Frac(fe, "cy", rc.Cam); rc.FeR = Frac(fe, "r", rc.Cam);
+        }
+
+        static string Frac(Dictionary<string, object> d, string k, int cam)
+        {
+            object v;
+            if (!d.TryGetValue(k, out v) || v == null) return "";
+            double x;
+            if (v is double) x = (double)v;
+            else if (v is string && ((string)v).Trim().Length == 0) return "";
+            else if (!(v is string) || !double.TryParse((string)v, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out x))
+                throw new ArgumentException("Fisheye kamera " + cam + ": " + k + " harus angka 0-1.");
+            if (x < 0 || x > 1 || double.IsNaN(x)) throw new ArgumentException("Fisheye kamera " + cam + ": " + k + " harus angka 0-1.");
+            return x.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        static string FeJson(RegCam c)
+        {
+            if (!c.Fisheye) return "null";
+            var sb = new StringBuilder();
+            sb.Append("{\"mount\":").Append(Json.Q(c.FeMount)).Append(",\"fov\":").Append(c.FeFov).Append(",\"tile\":").Append(Json.Q(c.FeTile))
+              .Append(",\"mode\":").Append(Json.Q(c.FeMode)).Append(",\"mirror\":").Append(c.FeMirror ? "true" : "false");
+            if (c.FeCx.Length > 0) sb.Append(",\"cx\":").Append(c.FeCx);
+            if (c.FeCy.Length > 0) sb.Append(",\"cy\":").Append(c.FeCy);
+            if (c.FeR.Length > 0) sb.Append(",\"r\":").Append(c.FeR);
+            return sb.Append("}").ToString();
         }
 
         static string Clean(string s, int max)
@@ -164,6 +227,7 @@ namespace NvrBridge
             var sb = new StringBuilder();
             sb.Append("{\"cam\":").Append(c.Cam).Append(",\"id\":").Append(Json.Q(c.StreamId)).Append(",\"name\":").Append(Json.Q(c.Name));
             sb.Append(",\"enabled\":").Append(c.Enabled ? "true" : "false").Append(",\"ptz\":").Append(c.Ptz ? "true" : "false");
+            sb.Append(",\"fe\":").Append(FeJson(c));
             if (full)
             {
                 sb.Append(",\"ip\":").Append(Json.Q(c.Ip)).Append(",\"brand\":").Append(Json.Q(c.Brand))

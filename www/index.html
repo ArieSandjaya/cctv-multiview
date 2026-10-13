@@ -368,6 +368,16 @@ if (wall) {
 const autoBridge = location.protocol + '//' + location.hostname + ':' + (+cfg.bridgePort || 8090) + '/';
 if (cfg.nvrUrl === 'auto') cfg.nvrUrl = autoBridge;
 if (cfg.bridgeUrl === 'auto') cfg.bridgeUrl = autoBridge;
+// Pengaturan dari aplikasi CctvViewer (form Pengaturan) dikirim lewat alamat halaman dan menimpa config.js.
+if (wall) {
+  const t = (qp.get('title') || '').slice(0, 80);
+  if (t) cfg.title = t;
+  if (['mse', 'webrtc', 'mse,webrtc', 'webrtc,mse'].includes(qp.get('mode'))) cfg.mode = qp.get('mode');
+  cfg.dewarpMax = intq('dewarp', +cfg.dewarpMax || 6, 0, 48);
+  const b = qp.get('bridge') || '';
+  if (/^https?:\/\/[A-Za-z0-9.\-]{1,100}(:\d{1,5})?\/?$/.test(b)) { cfg.bridgeUrl = b.replace(/\/?$/, '/'); cfg.nvrUrl = cfg.bridgeUrl; }
+  else if (qp.get('bridge') === 'off') { cfg.bridgeUrl = ''; cfg.nvrUrl = ''; }
+}
 
 const $ = (id) => document.getElementById(id);
 const grid = $('grid'), notice = $('notice'), viewer = $('viewer');
@@ -961,20 +971,6 @@ function showNotice(html) {
   notice.querySelector('.box').innerHTML = html;
   notice.classList.add('show');
 }
-// Pengaturan dari aplikasi CctvViewer (Panel > Pengaturan > Tampilan kamera): viewer.json di folder www, menimpa config.js
-async function loadViewerJson() {
-  try {
-    const r = await fetch('viewer.json', {cache: 'no-store'});
-    if (!r.ok) return;
-    const j = await r.json();
-    for (const k of ['title', 'mode', 'hdSuffix', 'layout', 'rotateSeconds', 'dewarpMax']) if (j[k] !== undefined && j[k] !== '') cfg[k] = j[k];
-    if (Array.isArray(j.order)) cfg.order = j.order;
-    if (Array.isArray(j.hide)) cfg.hide = j.hide;
-    if (j.names) cfg.names = Object.assign({}, cfg.names, j.names);
-    if (j.fisheye) cfg.fisheye = Object.assign({}, cfg.fisheye, j.fisheye);
-    document.title = cfg.title; $('title').textContent = cfg.title;
-  } catch {}
-}
 let retryTimer = null;
 async function probeBridge() {
   // Tombol Playback/PTZ/Peta hanya muncul jika NvrBridge benar-benar menjawab.
@@ -991,13 +987,18 @@ async function probeBridge() {
     const c = await fetch(root + 'api/cams', {cache: 'no-store', signal: ctl.signal});
     if (c.ok) {
       const j = await c.json();
-      const names = Object.assign({}, cfg.names), nvrCam = Object.assign({}, cfg.nvrCam);
+      const names = Object.assign({}, cfg.names), nvrCam = Object.assign({}, cfg.nvrCam), fisheye = Object.assign({}, cfg.fisheye);
+      const order = [];
       for (const k of j.cams || []) {
         if (!/^cam\d+$/.test(k.id)) continue;
+        order.push(k.id);
         if (!(k.id in cfg.names)) names[k.id] = k.name;
         if (!(k.id in cfg.nvrCam)) nvrCam[k.id] = k.cam;
+        if (k.fe && !(k.id in cfg.fisheye)) fisheye[k.id] = k.fe;
       }
-      cfg.names = names; cfg.nvrCam = nvrCam;
+      cfg.names = names; cfg.nvrCam = nvrCam; cfg.fisheye = fisheye;
+      // Urutan tampil dari daftar kamera di form (config.js tetap lebih diutamakan jika diisi)
+      if (!cfg.order.length) cfg.order = order;
     }
   }
   catch { if (wall) { cfg.nvrUrl = ''; showNvrBtn(); } }
@@ -1006,7 +1007,6 @@ async function probeBridge() {
 async function start() {
   clearTimeout(retryTimer);
   notice.classList.remove('show');
-  await loadViewerJson();
   await probeBridge();
   try {
     state.allCams = await loadCams();
@@ -1021,7 +1021,7 @@ async function start() {
   state.cams = wall ? state.allCams.slice((wall.screen - 1) * wall.per, wall.screen * wall.per) : state.allCams;
   if (!state.allCams.length) {
     showNotice(`<h2>Belum ada kamera</h2>
-      <p>Tambahkan stream di <code>go2rtc.yaml</code> pada bagian <code>streams:</code>, lalu restart go2rtc. Setiap stream tanpa akhiran <code>${cfg.hdSuffix}</code> akan tampil sebagai satu tile.</p>`);
+      <p>Tambahkan kamera lewat <b>Pengaturan &gt; Kamera NVR</b> di aplikasi CctvViewer (atau tambahkan stream di <code>go2rtc.yaml</code>). Setiap stream tanpa akhiran <code>${cfg.hdSuffix}</code> tampil sebagai satu tile.</p>`);
     updateChrome();
     if (wall) retryTimer = setTimeout(start, 10000);
     return;
